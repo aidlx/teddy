@@ -32,6 +32,12 @@ interface ConversationSummary {
   updated_at: string;
 }
 
+interface ImageAttachment {
+  id: string;
+  dataUrl: string;
+  name: string;
+}
+
 export function AssistantApp() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
@@ -40,9 +46,17 @@ export function AssistantApp() {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<ConversationSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [extracting, setExtracting] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
 
   const scrollerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     void loadHistory();
@@ -89,18 +103,24 @@ export function AssistantApp() {
   }
 
   const handleSend = useCallback(
-    async (text: string) => {
-      if (!text.trim() || sending) return;
+    async (text: string, attachedImages: ImageAttachment[]) => {
+      if ((!text.trim() && attachedImages.length === 0) || sending) return;
       setSending(true);
       setError(null);
+
+      const displayContent =
+        attachedImages.length > 0
+          ? `${text}${text ? '\n\n' : ''}[${attachedImages.length} image${attachedImages.length === 1 ? '' : 's'} attached]`
+          : text;
 
       const optimistic: UIMessage = {
         id: `tmp-${Date.now()}`,
         role: 'user',
-        content: text,
+        content: displayContent,
         created_at: new Date().toISOString(),
       };
       setMessages((m) => [...m, optimistic]);
+      setImages([]);
 
       try {
         const res = await fetch('/api/assistant', {
@@ -108,7 +128,8 @@ export function AssistantApp() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversation_id: conversationId,
-            message: text,
+            message: text || '(see attached images)',
+            images: attachedImages.length > 0 ? attachedImages.map((i) => i.dataUrl) : undefined,
           }),
         });
         if (!res.ok || !res.body) {
@@ -187,22 +208,129 @@ export function AssistantApp() {
     }
   }
 
+  function submit() {
+    const text = input.trim();
+    if (!text && images.length === 0) return;
+    setInput('');
+    void handleSend(text, images);
+  }
+
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
-    void handleSend(text);
+    submit();
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      const text = input.trim();
-      if (!text) return;
-      setInput('');
-      void handleSend(text);
+      submit();
     }
+  }
+
+  async function readImageAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    setError(null);
+    setExtracting(true);
+    try {
+      for (const file of Array.from(fileList)) {
+        if (file.type.startsWith('image/')) {
+          if (images.length >= 6) {
+            setError('Max 6 images per message.');
+            break;
+          }
+          const dataUrl = await readImageAsDataUrl(file);
+          setImages((prev) => [
+            ...prev,
+            { id: `img-${Date.now()}-${Math.random()}`, dataUrl, name: file.name || 'image' },
+          ]);
+        } else {
+          // Extract text server-side (PDFs + plain text), append to composer
+          const form = new FormData();
+          form.append('file', file);
+          const res = await fetch('/api/extract-file', { method: 'POST', body: form });
+          const data = (await res.json().catch(() => ({}))) as {
+            text?: string;
+            filename?: string;
+            truncated?: boolean;
+            error?: string;
+          };
+          if (!res.ok || !data.text) {
+            setError(data.error ?? `Couldn't read ${file.name}`);
+            continue;
+          }
+          const header = `[File: ${data.filename ?? file.name}${data.truncated ? ' — truncated' : ''}]`;
+          setInput((prev) => `${prev}${prev ? '\n\n' : ''}${header}\n${data.text}`);
+        }
+      }
+    } finally {
+      setExtracting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function startRecording() {
+    if (recording || transcribing) return;
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      mr.onstop = async () => {
+        mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+        const blob = new Blob(audioChunksRef.current, {
+          type: mr.mimeType || 'audio/webm',
+        });
+        audioChunksRef.current = [];
+        if (blob.size < 500) return; // ignore accidental taps
+        setTranscribing(true);
+        try {
+          const form = new FormData();
+          form.append(
+            'audio',
+            new File([blob], 'recording.webm', { type: blob.type || 'audio/webm' }),
+          );
+          const res = await fetch('/api/transcribe', { method: 'POST', body: form });
+          const data = (await res.json().catch(() => ({}))) as {
+            text?: string;
+            error?: string;
+          };
+          if (!res.ok || !data.text) {
+            setError(data.error ?? 'Transcription failed');
+          } else {
+            setInput((prev) => (prev ? `${prev} ${data.text}` : (data.text ?? '')));
+            textareaRef.current?.focus();
+          }
+        } finally {
+          setTranscribing(false);
+        }
+      };
+      mr.start();
+      setRecording(true);
+    } catch (err) {
+      setError((err as Error).message ?? 'Mic access denied');
+    }
+  }
+
+  function stopRecording() {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state !== 'inactive') mr.stop();
+    mediaRecorderRef.current = null;
+    setRecording(false);
   }
 
   const empty = messages.length === 0;
@@ -274,34 +402,114 @@ export function AssistantApp() {
         {sending && <ThinkingDots />}
       </div>
 
-      <form
-        onSubmit={onSubmit}
-        className="px-4 pb-4 pt-2 md:px-6 md:pb-6"
-      >
-        <div className="flex items-end gap-2 rounded-2xl border border-zinc-200 bg-white px-3 py-2 shadow-sm focus-within:border-amber-400/50 focus-within:ring-2 focus-within:ring-amber-400/20 dark:border-zinc-800 dark:bg-zinc-950/60">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            rows={1}
-            placeholder="Tell Teddy what's going on…"
-            className="flex-1 resize-none bg-transparent py-1.5 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-100 dark:placeholder:text-zinc-600"
-            style={{ maxHeight: '8rem' }}
-          />
-          <button
-            type="submit"
-            disabled={sending || !input.trim()}
-            className="flex h-8 w-8 flex-none items-center justify-center rounded-lg bg-amber-400 text-zinc-950 shadow-sm transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-30"
-            aria-label="Send"
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
-              <path d="M3 10l14-7-7 14-2-6-5-1z" />
-            </svg>
-          </button>
+      <form onSubmit={onSubmit} className="px-4 pb-4 pt-2 md:px-6 md:pb-6">
+        <div className="flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-white px-3 py-2 shadow-sm focus-within:border-amber-400/50 focus-within:ring-2 focus-within:ring-amber-400/20 dark:border-zinc-800 dark:bg-zinc-950/60">
+          {images.length > 0 && (
+            <ul className="flex flex-wrap gap-2 px-0.5 pt-1">
+              {images.map((img) => (
+                <li key={img.id} className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={img.dataUrl}
+                    alt={img.name}
+                    className="h-14 w-14 rounded-md object-cover ring-1 ring-zinc-200 dark:ring-zinc-800"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setImages((prev) => prev.filter((x) => x.id !== img.id))}
+                    className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-zinc-900 text-[10px] text-white shadow hover:bg-zinc-700 dark:bg-zinc-700 dark:hover:bg-zinc-600"
+                    aria-label="Remove image"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex items-end gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,application/pdf,text/*,.md,.csv,.log,.json,.tsv"
+              onChange={(e) => void handleFiles(e.target.files)}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={extracting}
+              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-200/60 hover:text-zinc-900 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-900/60 dark:hover:text-zinc-100"
+              aria-label="Attach file"
+              title="Attach image, PDF, or text file"
+            >
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4">
+                <path d="M13.5 7L8 12.5a2.5 2.5 0 103.54 3.54L17 10.5a4 4 0 00-5.66-5.66L5.5 10.68a5.5 5.5 0 007.78 7.78L18 13.8" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                void startRecording();
+              }}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                stopRecording();
+              }}
+              onPointerLeave={() => {
+                if (recording) stopRecording();
+              }}
+              disabled={transcribing}
+              className={`flex h-8 w-8 flex-none items-center justify-center rounded-lg transition disabled:opacity-40 ${
+                recording
+                  ? 'bg-rose-500 text-white shadow-sm'
+                  : 'text-zinc-500 hover:bg-zinc-200/60 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900/60 dark:hover:text-zinc-100'
+              }`}
+              aria-label={recording ? 'Recording — release to send' : 'Hold to talk'}
+              title="Hold to talk"
+            >
+              {transcribing ? (
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              ) : (
+                <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                  <path d="M10 13a3 3 0 003-3V5a3 3 0 10-6 0v5a3 3 0 003 3z" />
+                  <path d="M5 10a5 5 0 0010 0h-1.5a3.5 3.5 0 01-7 0H5zm4.25 5.95V18h1.5v-2.05a6 6 0 005-5.95H14a4.5 4.5 0 01-9 0H3.5a6 6 0 005.75 5.95z" />
+                </svg>
+              )}
+            </button>
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              rows={1}
+              placeholder={
+                recording
+                  ? 'Recording… release to send'
+                  : transcribing
+                    ? 'Transcribing…'
+                    : extracting
+                      ? 'Reading file…'
+                      : "Tell Teddy what's going on…"
+              }
+              className="flex-1 resize-none bg-transparent py-1.5 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-100 dark:placeholder:text-zinc-600"
+              style={{ maxHeight: '8rem' }}
+            />
+            <button
+              type="submit"
+              disabled={sending || (!input.trim() && images.length === 0)}
+              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg bg-amber-400 text-zinc-950 shadow-sm transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-30"
+              aria-label="Send"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                <path d="M3 10l14-7-7 14-2-6-5-1z" />
+              </svg>
+            </button>
+          </div>
         </div>
         <p className="mt-1.5 text-center text-[10px] text-zinc-400 dark:text-zinc-600">
-          Enter to send · Shift+Enter for newline
+          Enter to send · Shift+Enter for newline · Hold mic to talk
         </p>
       </form>
     </div>

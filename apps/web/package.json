@@ -20,6 +20,7 @@
     "node-ical": "^0.26.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "unpdf": "^1.6.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

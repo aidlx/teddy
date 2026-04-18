@@ -3,6 +3,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionMessageToolCall,
   ChatCompletionTool,
+  ChatCompletionUserMessageParam,
 } from 'openai/resources/chat/completions';
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
@@ -32,7 +33,7 @@ export interface RunAgentOptions {
   model: string;
   systemPrompt: string;
   history: ChatCompletionMessageParam[];
-  userMessage: string;
+  userMessage: ChatCompletionUserMessageParam['content'];
   tools: AgentTool[];
   maxIterations?: number;
   onEvent: (event: AgentEvent) => Promise<void> | void;

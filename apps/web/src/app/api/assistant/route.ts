@@ -3,9 +3,11 @@ import { z } from 'zod';
 import { getOpenAI, runAgent, type AgentEvent } from '@teddy/ai';
 import type {
   ChatCompletionAssistantMessageParam,
+  ChatCompletionContentPart,
   ChatCompletionMessageParam,
   ChatCompletionMessageToolCall,
   ChatCompletionToolMessageParam,
+  ChatCompletionUserMessageParam,
 } from 'openai/resources/chat/completions';
 import type { Json } from '@teddy/supabase';
 import { getServerSupabase } from '@/lib/supabase/server';
@@ -18,7 +20,11 @@ const MODEL = 'gpt-4o-mini';
 
 const RequestSchema = z.object({
   conversation_id: z.string().uuid().nullable().optional(),
-  message: z.string().min(1).max(4000),
+  message: z.string().min(1).max(40_000),
+  // Data-URL-encoded images the user attached. Pass-through to the model as
+  // vision parts; not persisted in message history (they'd bloat the DB, and
+  // the assistant's textual response captures the salient interpretation).
+  images: z.array(z.string().startsWith('data:image/')).max(6).optional(),
 });
 
 interface DbMessageRow {
@@ -111,6 +117,20 @@ export async function POST(request: NextRequest) {
   const systemPrompt = `${SYSTEM_PROMPT}\n\n${context}`;
   const tools = buildTools(supabase, user.id);
 
+  // If the user attached images, wrap the message + images in a multipart
+  // user content array (gpt-4o-mini supports vision). Otherwise plain string.
+  const imageUrls = parsed.data.images ?? [];
+  const userContent: ChatCompletionUserMessageParam['content'] =
+    imageUrls.length > 0
+      ? ([
+          { type: 'text', text: parsed.data.message },
+          ...imageUrls.map(
+            (url) =>
+              ({ type: 'image_url', image_url: { url } }) satisfies ChatCompletionContentPart,
+          ),
+        ] satisfies ChatCompletionContentPart[])
+      : parsed.data.message;
+
   const encoder = new TextEncoder();
   const convId = conversationId;
 
@@ -133,7 +153,7 @@ export async function POST(request: NextRequest) {
           model: MODEL,
           systemPrompt,
           history,
-          userMessage: parsed.data.message,
+          userMessage: userContent,
           tools,
           maxIterations: 8,
           onEvent: async (ev: AgentEvent) => {
