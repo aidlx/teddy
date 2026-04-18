@@ -3,7 +3,9 @@ import type { EventInstance, VEvent } from 'node-ical';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@teddy/supabase';
 
-type EventRow = Database['public']['Tables']['events']['Insert'];
+type EventRow = Database['public']['Tables']['events']['Row'];
+type EventInsert = Database['public']['Tables']['events']['Insert'];
+type EventUpdate = Database['public']['Tables']['events']['Update'];
 
 const COURSE_COLORS = [
   '#ef4444',
@@ -15,6 +17,14 @@ const COURSE_COLORS = [
   '#a855f7',
   '#ec4899',
 ];
+
+export interface SyncResult {
+  inserted: number;
+  updated: number;
+  deleted: number;
+  unchanged: number;
+  coursesCreated: number;
+}
 
 function textOf(v: unknown): string | null {
   if (v == null) return null;
@@ -46,12 +56,35 @@ function fallbackCourseFromTitle(title: string): { code: string; name: string } 
   return { code: cleaned.toLowerCase(), name: cleaned };
 }
 
+// Stable key for matching an iCal instance against a stored row:
+// recurring events share UID but differ by start_at.
+function matchKey(icalUid: string | null | undefined, startIso: string): string {
+  return `${icalUid ?? ''}__${startIso}`;
+}
+
+function rowsEqual(
+  existing: Pick<
+    EventRow,
+    'title' | 'location' | 'description' | 'end_at' | 'all_day' | 'course_id'
+  >,
+  incoming: EventInsert,
+): boolean {
+  return (
+    existing.title === incoming.title &&
+    (existing.location ?? null) === (incoming.location ?? null) &&
+    (existing.description ?? null) === (incoming.description ?? null) &&
+    (existing.end_at ?? null) === (incoming.end_at ?? null) &&
+    existing.all_day === (incoming.all_day ?? false) &&
+    (existing.course_id ?? null) === (incoming.course_id ?? null)
+  );
+}
+
 export async function syncSubscription(
   supabase: SupabaseClient<Database>,
   ownerId: string,
   subscriptionId: string,
   icalUrl: string,
-): Promise<{ inserted: number; coursesCreated: number }> {
+): Promise<SyncResult> {
   const parsed = await ical.async.fromURL(icalUrl);
 
   const now = new Date();
@@ -75,19 +108,19 @@ export async function syncSubscription(
     if (parsed) candidates.set(parsed.code, parsed.name);
   }
 
-  const { data: existing } = await supabase
+  const { data: existingCourses } = await supabase
     .from('courses')
     .select('id, code')
     .eq('owner_id', ownerId);
   const byCode = new Map<string, string>();
-  for (const c of existing ?? []) {
+  for (const c of existingCourses ?? []) {
     if (c.code) byCode.set(c.code, c.id);
   }
 
   const missing = [...candidates.entries()].filter(([code]) => !byCode.has(code));
   let coursesCreated = 0;
   if (missing.length > 0) {
-    const offset = existing?.length ?? 0;
+    const offset = existingCourses?.length ?? 0;
     const newRows = missing.map(([code, name], i) => ({
       owner_id: ownerId,
       name,
@@ -105,11 +138,14 @@ export async function syncSubscription(
     coursesCreated = inserted?.length ?? 0;
   }
 
-  const rows: EventRow[] = expanded.map(({ event, instance }) => {
+  // Build incoming rows keyed for lookup.
+  const incomingByKey = new Map<string, EventInsert>();
+  for (const { event, instance } of expanded) {
     const title = textOf(event.summary) ?? '(untitled)';
     const course = parseCourseFromTitle(title) ?? fallbackCourseFromTitle(title);
     const courseId = course ? byCode.get(course.code) ?? null : null;
-    return {
+    const startIso = instance.start.toISOString();
+    const row: EventInsert = {
       owner_id: ownerId,
       subscription_id: subscriptionId,
       course_id: courseId,
@@ -118,16 +154,81 @@ export async function syncSubscription(
       title,
       location: textOf(event.location),
       description: textOf(event.description),
-      start_at: instance.start.toISOString(),
+      start_at: startIso,
       end_at: instance.end ? instance.end.toISOString() : null,
       all_day: instance.isFullDay,
     };
-  });
+    // If the feed has duplicates for the same (uid, start), last one wins.
+    incomingByKey.set(matchKey(event.uid, startIso), row);
+  }
 
-  await supabase.from('events').delete().eq('subscription_id', subscriptionId);
+  const { data: existingEvents, error: existingErr } = await supabase
+    .from('events')
+    .select('id, ical_uid, start_at, title, location, description, end_at, all_day, course_id')
+    .eq('subscription_id', subscriptionId);
+  if (existingErr) throw new Error(existingErr.message);
 
-  if (rows.length > 0) {
-    const { error } = await supabase.from('events').insert(rows);
+  const existingByKey = new Map<
+    string,
+    Pick<
+      EventRow,
+      | 'id'
+      | 'title'
+      | 'location'
+      | 'description'
+      | 'end_at'
+      | 'all_day'
+      | 'course_id'
+    >
+  >();
+  for (const e of existingEvents ?? []) {
+    existingByKey.set(matchKey(e.ical_uid, e.start_at), e);
+  }
+
+  const toInsert: EventInsert[] = [];
+  const toUpdate: Array<{ id: string; patch: EventUpdate }> = [];
+  let unchanged = 0;
+
+  for (const [key, incoming] of incomingByKey.entries()) {
+    const existing = existingByKey.get(key);
+    if (!existing) {
+      toInsert.push(incoming);
+      continue;
+    }
+    if (rowsEqual(existing, incoming)) {
+      unchanged++;
+      continue;
+    }
+    toUpdate.push({
+      id: existing.id,
+      patch: {
+        title: incoming.title,
+        location: incoming.location ?? null,
+        description: incoming.description ?? null,
+        end_at: incoming.end_at ?? null,
+        all_day: incoming.all_day ?? false,
+        course_id: incoming.course_id ?? null,
+      },
+    });
+  }
+
+  const toDeleteIds: string[] = [];
+  for (const [key, existing] of existingByKey.entries()) {
+    if (!incomingByKey.has(key)) toDeleteIds.push(existing.id);
+  }
+
+  if (toInsert.length > 0) {
+    const { error } = await supabase.from('events').insert(toInsert);
+    if (error) throw new Error(error.message);
+  }
+
+  for (const { id, patch } of toUpdate) {
+    const { error } = await supabase.from('events').update(patch).eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  if (toDeleteIds.length > 0) {
+    const { error } = await supabase.from('events').delete().in('id', toDeleteIds);
     if (error) throw new Error(error.message);
   }
 
@@ -136,5 +237,11 @@ export async function syncSubscription(
     .update({ last_synced_at: new Date().toISOString(), last_error: null })
     .eq('id', subscriptionId);
 
-  return { inserted: rows.length, coursesCreated };
+  return {
+    inserted: toInsert.length,
+    updated: toUpdate.length,
+    deleted: toDeleteIds.length,
+    unchanged,
+    coursesCreated,
+  };
 }

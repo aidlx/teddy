@@ -36,8 +36,8 @@ export async function POST(request: NextRequest) {
   if (subError) return NextResponse.json({ error: subError.message }, { status: 500 });
 
   try {
-    const { inserted } = await syncSubscription(supabase, user.id, subscription.id, url);
-    return NextResponse.json({ subscription, inserted });
+    const result = await syncSubscription(supabase, user.id, subscription.id, url);
+    return NextResponse.json({ subscription, result });
   } catch (err) {
     const message = (err as Error).message ?? 'Sync failed';
     await supabase

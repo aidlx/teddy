@@ -1,9 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { getServerSupabase } from '@/lib/supabase/server';
-import { syncSubscription } from '@/lib/ical';
+import { syncSubscription, type SyncResult } from '@/lib/ical';
 
 export const runtime = 'nodejs';
+
+const STALE_MS = 10 * 60 * 1000;
 
 const SyncSchema = z.object({
   subscription_id: z.string().uuid().optional(),
@@ -22,18 +24,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.message }, { status: 400 });
   }
 
-  let query = supabase.from('calendar_subscriptions').select('id, ical_url');
-  if (parsed.data.subscription_id) {
-    query = query.eq('id', parsed.data.subscription_id);
-  }
-  const { data: subs, error } = await query;
+  const { data: subs, error } = await supabase
+    .from('calendar_subscriptions')
+    .select('id, ical_url, last_synced_at');
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const results: Array<{ id: string; inserted?: number; error?: string }> = [];
-  for (const sub of subs ?? []) {
+  const staleCutoff = Date.now() - STALE_MS;
+  const filtered = (subs ?? []).filter((s) => {
+    if (parsed.data.subscription_id) return s.id === parsed.data.subscription_id;
+    if (!s.last_synced_at) return true;
+    return new Date(s.last_synced_at).getTime() < staleCutoff;
+  });
+
+  const results: Array<{ id: string; result?: SyncResult; error?: string }> = [];
+  for (const sub of filtered) {
     try {
-      const { inserted } = await syncSubscription(supabase, user.id, sub.id, sub.ical_url);
-      results.push({ id: sub.id, inserted });
+      const result = await syncSubscription(supabase, user.id, sub.id, sub.ical_url);
+      results.push({ id: sub.id, result });
     } catch (err) {
       const message = (err as Error).message ?? 'Sync failed';
       await supabase
@@ -44,5 +51,5 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ results });
+  return NextResponse.json({ results, skipped: (subs?.length ?? 0) - filtered.length });
 }

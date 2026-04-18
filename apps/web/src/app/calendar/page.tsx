@@ -78,6 +78,7 @@ export default function CalendarPage() {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
   const [selected, setSelected] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -137,14 +138,31 @@ export default function CalendarPage() {
   async function syncOne(id: string) {
     setSyncing(id);
     setError(null);
+    setNotice(null);
     const res = await fetch('/api/calendar/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subscription_id: id }),
     });
     const data = await readJson(res);
-    if (!res.ok) setError(String(data.error ?? `Sync failed (${res.status})`));
-    else await loadAll();
+    if (!res.ok) {
+      setError(String(data.error ?? `Sync failed (${res.status})`));
+    } else {
+      const results = (data.results ?? []) as Array<{
+        result?: { inserted: number; updated: number; deleted: number; unchanged: number; coursesCreated: number };
+        error?: string;
+      }>;
+      const r = results[0];
+      if (r?.error) {
+        setError(r.error);
+      } else if (r?.result) {
+        const { inserted, updated, deleted, coursesCreated } = r.result;
+        const parts = [`+${inserted}`, `~${updated}`, `−${deleted}`];
+        if (coursesCreated > 0) parts.push(`${coursesCreated} new course${coursesCreated === 1 ? '' : 's'}`);
+        setNotice(`Synced: ${parts.join('  ')}`);
+      }
+      await loadAll();
+    }
     setSyncing(null);
   }
 
@@ -212,6 +230,12 @@ export default function CalendarPage() {
       {error && (
         <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">
           {error}
+        </p>
+      )}
+
+      {notice && (
+        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300">
+          {notice}
         </p>
       )}
 

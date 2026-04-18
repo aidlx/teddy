@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { CalendarAutoSync } from '@/components/CalendarAutoSync';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -32,6 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="min-h-screen bg-zinc-50 text-zinc-900 antialiased selection:bg-amber-400/40 selection:text-amber-950 dark:bg-zinc-950 dark:text-zinc-100 dark:selection:bg-amber-400/30 dark:selection:text-amber-100">
         <ThemeToggle />
+        <CalendarAutoSync />
         {children}
       </body>
     </html>
