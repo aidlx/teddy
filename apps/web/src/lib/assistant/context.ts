@@ -13,7 +13,7 @@ You have tools to read the user's data and to write to it. Use them freely for r
 Context handling:
 - A CONTEXT block below gives you the current time, what the user is doing right now (if they're in a scheduled event), their courses, and recent items. Use it to infer the right course_id when the user speaks vaguely ("we got homework"). If they're in "710.006 Computer Vision VU" and say "we have homework next week", link it to that course.
 - If you can't confidently match a course, leave course_id null instead of guessing.
-- Dates: resolve "tomorrow", "Friday", "next week" relative to the current time in the context. All due_at values you pass to tools must be ISO 8601 UTC.
+- Dates: the context gives you pre-computed UTC anchors for today, tomorrow, this week, and next week. When the user says "next week" or "this week", use those bounds verbatim as the from/to arguments for get_events — do NOT compute your own. For specific days like "Friday", count forward from the current date shown in the context. All due_at values you pass to tools must be ISO 8601 UTC.
 
 Style: Short, direct, no filler. No greetings, no "I'd be happy to". Just do the thing.`;
 
@@ -21,6 +21,19 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
   const now = new Date();
   const nowIso = now.toISOString();
   const in24hIso = new Date(now.getTime() + 24 * 3600 * 1000).toISOString();
+
+  // Pre-compute common date anchors so the model doesn't have to do date math
+  // (LLMs are unreliable at "today + 7"). All bounds are UTC day-start, week
+  // boundaries Monday 00:00 UTC → next Monday 00:00 UTC.
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const tomorrowStart = new Date(todayStart.getTime() + 24 * 3600 * 1000);
+  const dayAfterStart = new Date(todayStart.getTime() + 48 * 3600 * 1000);
+  // Monday = 1 in getUTCDay() (0 = Sunday). Compute days since last Monday.
+  const dow = todayStart.getUTCDay();
+  const daysSinceMon = (dow + 6) % 7;
+  const thisMonStart = new Date(todayStart.getTime() - daysSinceMon * 24 * 3600 * 1000);
+  const nextMonStart = new Date(thisMonStart.getTime() + 7 * 24 * 3600 * 1000);
+  const mondayAfterNextStart = new Date(thisMonStart.getTime() + 14 * 24 * 3600 * 1000);
 
   const [coursesRes, currentRes, upcomingRes, openTasksRes] = await Promise.all([
     supabase
@@ -63,6 +76,11 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
       minute: '2-digit',
     })})`,
   );
+  lines.push('Date anchors (UTC, use these verbatim as from/to bounds):');
+  lines.push(`  today:           ${todayStart.toISOString()} → ${tomorrowStart.toISOString()}`);
+  lines.push(`  tomorrow:        ${tomorrowStart.toISOString()} → ${dayAfterStart.toISOString()}`);
+  lines.push(`  this week (Mon–Sun): ${thisMonStart.toISOString()} → ${nextMonStart.toISOString()}`);
+  lines.push(`  next week (Mon–Sun): ${nextMonStart.toISOString()} → ${mondayAfterNextStart.toISOString()}`);
 
   const currentEv = currentRes.data?.[0];
   if (currentEv) {

@@ -17,7 +17,7 @@ export const runtime = 'nodejs';
 const MODEL = 'gpt-4o-mini';
 
 const RequestSchema = z.object({
-  conversation_id: z.string().uuid().optional(),
+  conversation_id: z.string().uuid().nullable().optional(),
   message: z.string().min(1).max(4000),
 });
 
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Resolve or create the conversation.
-  let conversationId = parsed.data.conversation_id;
+  let conversationId = parsed.data.conversation_id ?? undefined;
   if (!conversationId) {
     const { data, error } = await supabase
       .from('conversations')
