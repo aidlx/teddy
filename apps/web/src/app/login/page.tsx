@@ -54,7 +54,7 @@ export default function LoginPage() {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-8 px-6 py-10">
       <Link href="/" className="flex items-center gap-2 self-start">
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-400/10 ring-1 ring-amber-400/20">
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-400/10 ring-1 ring-amber-400/30 dark:ring-amber-400/20">
           <span className="text-base" aria-hidden>
             🧸
           </span>
@@ -66,7 +66,7 @@ export default function LoginPage() {
         <h1 className="text-3xl font-semibold tracking-tight">
           {mode === 'signin' ? 'Welcome back' : 'Create your account'}
         </h1>
-        <p className="text-sm text-zinc-400">
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
           {mode === 'signin'
             ? 'Sign in to pick up where you left off.'
             : 'Start capturing class notes in seconds.'}
@@ -75,7 +75,7 @@ export default function LoginPage() {
 
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-zinc-400" htmlFor="email">
+          <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400" htmlFor="email">
             Email
           </label>
           <input
@@ -85,12 +85,12 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
-            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 transition focus:border-amber-400/40 focus:outline-none focus:ring-2 focus:ring-amber-400/10"
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 transition focus:border-amber-400/50 focus:outline-none focus:ring-2 focus:ring-amber-400/20 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-amber-400/40 dark:focus:ring-amber-400/10"
           />
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-zinc-400" htmlFor="password">
+          <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400" htmlFor="password">
             Password
           </label>
           <input
@@ -101,25 +101,25 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="At least 6 characters"
-            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 transition focus:border-amber-400/40 focus:outline-none focus:ring-2 focus:ring-amber-400/10"
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 transition focus:border-amber-400/50 focus:outline-none focus:ring-2 focus:ring-amber-400/20 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-amber-400/40 dark:focus:ring-amber-400/10"
           />
         </div>
 
         <button
           type="submit"
           disabled={loading}
-          className="mt-1 rounded-lg bg-amber-400 px-4 py-2.5 text-sm font-medium text-zinc-950 shadow-lg shadow-amber-400/20 transition hover:bg-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-400/40 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-1 rounded-lg bg-amber-400 px-4 py-2.5 text-sm font-medium text-zinc-950 shadow-lg shadow-amber-400/30 transition hover:bg-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-400/40 disabled:cursor-not-allowed disabled:opacity-50 dark:shadow-amber-400/20"
         >
           {loading ? 'Please wait…' : mode === 'signin' ? 'Sign in' : 'Create account'}
         </button>
 
         {error && (
-          <p className="rounded-lg border border-rose-900/40 bg-rose-950/20 px-3 py-2 text-sm text-rose-300">
+          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">
             {error}
           </p>
         )}
         {info && (
-          <p className="rounded-lg border border-emerald-900/40 bg-emerald-950/20 px-3 py-2 text-sm text-emerald-300">
+          <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300">
             {info}
           </p>
         )}
@@ -132,7 +132,7 @@ export default function LoginPage() {
           setError(null);
           setInfo(null);
         }}
-        className="self-start text-sm text-zinc-400 underline decoration-zinc-700 underline-offset-4 transition hover:text-zinc-100 hover:decoration-zinc-500"
+        className="self-start text-sm text-zinc-600 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-900 hover:decoration-zinc-500 dark:text-zinc-400 dark:decoration-zinc-700 dark:hover:text-zinc-100 dark:hover:decoration-zinc-500"
       >
         {mode === 'signin'
           ? "Don't have an account? Create one"

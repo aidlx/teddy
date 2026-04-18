@@ -79,7 +79,7 @@ export default function CoursesPage() {
   }
 
   const inputCls =
-    'rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 transition focus:border-amber-400/40 focus:outline-none focus:ring-2 focus:ring-amber-400/10';
+    'rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 transition focus:border-amber-400/50 focus:outline-none focus:ring-2 focus:ring-amber-400/20 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-amber-400/40 dark:focus:ring-amber-400/10';
 
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-4 py-6 md:px-6 md:py-10">
@@ -87,7 +87,7 @@ export default function CoursesPage() {
         <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Courses</h1>
         <Link
           href="/"
-          className="text-sm text-zinc-400 transition hover:text-zinc-100"
+          className="text-sm text-zinc-600 transition hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           ← Home
         </Link>
@@ -95,7 +95,7 @@ export default function CoursesPage() {
 
       <form
         onSubmit={addCourse}
-        className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 md:p-5"
+        className="flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-white p-4 md:p-5 dark:border-zinc-800 dark:bg-zinc-950/60"
       >
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
           Add a course
@@ -124,12 +124,12 @@ export default function CoursesPage() {
         <button
           type="submit"
           disabled={loading || !name.trim()}
-          className="mt-1 self-start rounded-lg bg-amber-400 px-4 py-2 text-sm font-medium text-zinc-950 shadow-sm shadow-amber-400/20 transition hover:bg-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-400/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="mt-1 self-start rounded-lg bg-amber-400 px-4 py-2 text-sm font-medium text-zinc-950 shadow-sm shadow-amber-400/30 transition hover:bg-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-400/40 disabled:cursor-not-allowed disabled:opacity-40 dark:shadow-amber-400/20"
         >
           {loading ? 'Adding…' : 'Add course'}
         </button>
         {error && (
-          <p className="rounded-lg border border-rose-900/40 bg-rose-950/20 px-3 py-2 text-sm text-rose-300">
+          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">
             {error}
           </p>
         )}
@@ -137,24 +137,24 @@ export default function CoursesPage() {
 
       <ul className="flex flex-col gap-2">
         {courses.length === 0 && (
-          <li className="rounded-xl border border-dashed border-zinc-900 bg-zinc-950/40 px-4 py-8 text-center text-sm text-zinc-500">
+          <li className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-900 dark:bg-zinc-950/40">
             No courses yet. Add one above.
           </li>
         )}
         {courses.map((c) => (
           <li
             key={c.id}
-            className="flex items-center gap-3 rounded-xl border border-zinc-900 bg-zinc-950/40 px-4 py-3 transition hover:border-zinc-800 hover:bg-zinc-900/40"
+            className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 transition hover:border-zinc-300 hover:bg-zinc-100/60 dark:border-zinc-900 dark:bg-zinc-950/40 dark:hover:border-zinc-800 dark:hover:bg-zinc-900/40"
           >
             <span
-              className="h-3 w-3 flex-none rounded-full ring-2 ring-zinc-950"
+              className="h-3 w-3 flex-none rounded-full ring-2 ring-white dark:ring-zinc-950"
               style={{ backgroundColor: c.color ?? '#6366f1' }}
             />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
+              <div className="flex items-center gap-2 text-sm font-medium text-zinc-900 dark:text-zinc-100">
                 <span className="truncate">{c.name}</span>
                 {c.code && (
-                  <span className="flex-none rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wider text-zinc-400">
+                  <span className="flex-none rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wider text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
                     {c.code}
                   </span>
                 )}
@@ -165,7 +165,7 @@ export default function CoursesPage() {
             </div>
             <button
               onClick={() => deleteCourse(c.id)}
-              className="flex-none text-xs text-zinc-600 transition hover:text-rose-400"
+              className="flex-none text-xs text-zinc-500 transition hover:text-rose-600 dark:text-zinc-600 dark:hover:text-rose-400"
             >
               Delete
             </button>

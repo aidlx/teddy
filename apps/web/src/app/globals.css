@@ -3,9 +3,16 @@
 @tailwind utilities;
 
 :root {
+  --background: #fafafa;
+  --foreground: #18181b;
+  --accent: #fbbf24;
+  --glow: rgba(251, 191, 36, 0.08);
+}
+
+html.dark {
   --background: #09090b;
   --foreground: #f4f4f5;
-  --accent: #fbbf24;
+  --glow: rgba(251, 191, 36, 0.06);
 }
 
 html {
@@ -16,6 +23,10 @@ html {
     -apple-system,
     BlinkMacSystemFont,
     sans-serif;
+  color-scheme: light;
+}
+
+html.dark {
   color-scheme: dark;
 }
 
@@ -61,7 +72,7 @@ body::before {
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(ellipse 60rem 30rem at 50% -10%, rgba(251, 191, 36, 0.06), transparent 60%);
+    radial-gradient(ellipse 60rem 30rem at 50% -10%, var(--glow), transparent 60%);
 }
 
 body > * {

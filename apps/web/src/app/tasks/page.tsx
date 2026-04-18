@@ -79,14 +79,14 @@ export default function TasksPage() {
         <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Tasks</h1>
         <Link
           href="/"
-          className="text-sm text-zinc-400 transition hover:text-zinc-100"
+          className="text-sm text-zinc-600 transition hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           ← Home
         </Link>
       </header>
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-900/40 p-0.5">
+        <div className="inline-flex rounded-lg border border-zinc-200 bg-white p-0.5 dark:border-zinc-800 dark:bg-zinc-900/40">
           {(['open', 'done', 'all'] as const).map((f) => (
             <button
               key={f}
@@ -94,7 +94,7 @@ export default function TasksPage() {
               className={`rounded-md px-3 py-1 text-xs capitalize transition ${
                 filter === f
                   ? 'bg-amber-400 text-zinc-950'
-                  : 'text-zinc-400 hover:text-zinc-100'
+                  : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
               }`}
             >
               {f}
@@ -104,7 +104,7 @@ export default function TasksPage() {
         <select
           value={courseFilter}
           onChange={(e) => setCourseFilter(e.target.value)}
-          className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-700 focus:border-amber-400/40 focus:outline-none focus:ring-2 focus:ring-amber-400/10"
+          className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 transition hover:border-zinc-300 focus:border-amber-400/50 focus:outline-none focus:ring-2 focus:ring-amber-400/20 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-300 dark:hover:border-zinc-700 dark:focus:border-amber-400/40 dark:focus:ring-amber-400/10"
         >
           <option value="">All courses</option>
           {courses.map((c) => (
@@ -116,14 +116,14 @@ export default function TasksPage() {
       </div>
 
       {error && (
-        <p className="rounded-lg border border-rose-900/40 bg-rose-950/20 px-3 py-2 text-sm text-rose-300">
+        <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">
           {error}
         </p>
       )}
 
       <ul className="flex flex-col gap-1.5">
         {filtered.length === 0 && (
-          <li className="rounded-xl border border-dashed border-zinc-900 bg-zinc-950/40 px-4 py-8 text-center text-sm text-zinc-500">
+          <li className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-900 dark:bg-zinc-950/40">
             No tasks here yet.
           </li>
         )}
@@ -133,7 +133,7 @@ export default function TasksPage() {
           return (
             <li
               key={t.id}
-              className="group flex items-center gap-2.5 rounded-xl border border-zinc-900 bg-zinc-950/40 px-4 py-2.5 text-sm transition hover:border-zinc-800 hover:bg-zinc-900/40"
+              className="group flex items-center gap-2.5 rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm transition hover:border-zinc-300 hover:bg-zinc-100/60 dark:border-zinc-900 dark:bg-zinc-950/40 dark:hover:border-zinc-800 dark:hover:bg-zinc-900/40"
             >
               <input
                 type="checkbox"
@@ -149,13 +149,13 @@ export default function TasksPage() {
                 />
               )}
               <span
-                className={`truncate ${t.completed_at ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}
+                className={`truncate ${t.completed_at ? 'text-zinc-400 line-through dark:text-zinc-500' : 'text-zinc-900 dark:text-zinc-100'}`}
               >
                 {t.title}
               </span>
               {t.due_at && (
                 <span
-                  className={`ml-auto flex-none text-xs ${overdue ? 'text-rose-400' : 'text-zinc-500'}`}
+                  className={`ml-auto flex-none text-xs ${overdue ? 'text-rose-600 dark:text-rose-400' : 'text-zinc-500'}`}
                 >
                   {formatRelative(t.due_at)}
                 </span>
@@ -163,7 +163,7 @@ export default function TasksPage() {
               {t.capture_id && (
                 <Link
                   href={`/captures/${t.capture_id}`}
-                  className={`flex-none text-xs text-zinc-600 transition hover:text-zinc-300 ${t.due_at ? '' : 'ml-auto'}`}
+                  className={`flex-none text-xs text-zinc-500 transition hover:text-zinc-800 dark:text-zinc-600 dark:hover:text-zinc-300 ${t.due_at ? '' : 'ml-auto'}`}
                   title="View source capture"
                 >
                   source
@@ -171,7 +171,7 @@ export default function TasksPage() {
               )}
               <button
                 onClick={() => deleteTask(t.id)}
-                className="flex-none text-lg leading-none text-zinc-700 transition hover:text-rose-400"
+                className="flex-none text-lg leading-none text-zinc-400 transition hover:text-rose-600 dark:text-zinc-700 dark:hover:text-rose-400"
                 aria-label="Delete task"
               >
                 ×

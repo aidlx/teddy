@@ -38,7 +38,7 @@ export default async function CaptureDetailPage({
         <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Capture</h1>
         <Link
           href="/captures"
-          className="text-sm text-zinc-400 transition hover:text-zinc-100"
+          className="text-sm text-zinc-600 transition hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           ← History
         </Link>
@@ -47,12 +47,12 @@ export default async function CaptureDetailPage({
       <section className="flex flex-col gap-2">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
           <span>You wrote</span>
-          <span className="text-zinc-700">·</span>
+          <span className="text-zinc-300 dark:text-zinc-700">·</span>
           <span className="font-normal normal-case tracking-normal text-zinc-500">
             {formatRelative(capture.created_at)}
           </span>
         </div>
-        <blockquote className="whitespace-pre-wrap rounded-2xl border border-zinc-800 bg-zinc-950/60 px-4 py-4 text-[15px] leading-relaxed text-zinc-100">
+        <blockquote className="whitespace-pre-wrap rounded-2xl border border-zinc-200 bg-white px-4 py-4 text-[15px] leading-relaxed text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950/60 dark:text-zinc-100">
           {capture.raw_text}
         </blockquote>
       </section>
@@ -62,7 +62,7 @@ export default async function CaptureDetailPage({
           Created from this capture
         </h2>
         {(tasks ?? []).length === 0 && (notes ?? []).length === 0 && (
-          <p className="rounded-xl border border-dashed border-zinc-900 bg-zinc-950/40 px-4 py-6 text-center text-sm text-zinc-500">
+          <p className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-6 text-center text-sm text-zinc-500 dark:border-zinc-900 dark:bg-zinc-950/40">
             Nothing was saved from this capture.
           </p>
         )}
@@ -72,9 +72,9 @@ export default async function CaptureDetailPage({
             return (
               <li
                 key={t.id}
-                className="flex items-center gap-2 rounded-xl border border-zinc-900 bg-zinc-950/40 px-4 py-2.5 text-sm"
+                className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm dark:border-zinc-900 dark:bg-zinc-950/40"
               >
-                <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">
+                <span className="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-800 dark:bg-amber-400/10 dark:text-amber-300">
                   task
                 </span>
                 {course && (
@@ -84,7 +84,7 @@ export default async function CaptureDetailPage({
                     title={course.name}
                   />
                 )}
-                <span className="truncate text-zinc-100">{t.title}</span>
+                <span className="truncate text-zinc-900 dark:text-zinc-100">{t.title}</span>
                 {t.due_at && (
                   <span className="ml-auto flex-none text-xs text-zinc-500">
                     {formatRelative(t.due_at)}
@@ -98,10 +98,10 @@ export default async function CaptureDetailPage({
             return (
               <li
                 key={n.id}
-                className="rounded-xl border border-zinc-900 bg-zinc-950/40 px-4 py-2.5 text-sm"
+                className="rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm dark:border-zinc-900 dark:bg-zinc-950/40"
               >
                 <div className="flex items-center gap-2">
-                  <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-zinc-300">
+                  <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                     note
                   </span>
                   {course && (
@@ -111,9 +111,9 @@ export default async function CaptureDetailPage({
                       title={course.name}
                     />
                   )}
-                  <span className="font-medium text-zinc-100">{n.title ?? 'Note'}</span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-100">{n.title ?? 'Note'}</span>
                 </div>
-                <p className="mt-2 whitespace-pre-wrap text-zinc-300">{n.content}</p>
+                <p className="mt-2 whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">{n.content}</p>
               </li>
             );
           })}
@@ -125,7 +125,7 @@ export default async function CaptureDetailPage({
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
             How Teddy interpreted it
           </h2>
-          <pre className="overflow-x-auto rounded-xl border border-zinc-900 bg-zinc-950/60 px-4 py-3 font-mono text-xs leading-relaxed text-zinc-400">
+          <pre className="overflow-x-auto rounded-xl border border-zinc-200 bg-zinc-100 px-4 py-3 font-mono text-xs leading-relaxed text-zinc-700 dark:border-zinc-900 dark:bg-zinc-950/60 dark:text-zinc-400">
             {parsedPretty}
           </pre>
         </section>
