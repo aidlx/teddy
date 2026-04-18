@@ -16,19 +16,34 @@ function asBool(v: unknown): boolean | undefined {
   return typeof v === 'boolean' ? v : undefined;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function buildTools(supabase: DB, userId: string): AgentTool[] {
-  // Verify a course id belongs to this user before writing — guards against
-  // the model inventing uuids.
-  async function assertCourse(courseId: string | undefined): Promise<string | null> {
-    if (!courseId) return null;
+  // Resolve a user-supplied course reference to a uuid. Accepts either a
+  // proper uuid (verified to belong to this user) or a course code / name
+  // fragment (case-insensitive match) — the model sometimes passes the code
+  // by mistake. Returns null if nothing matches.
+  async function resolveCourse(ref: string | undefined): Promise<string | null> {
+    if (!ref) return null;
+    if (UUID_RE.test(ref)) {
+      const { data } = await supabase
+        .from('courses')
+        .select('id')
+        .eq('owner_id', userId)
+        .eq('id', ref)
+        .maybeSingle();
+      return data?.id ?? null;
+    }
     const { data } = await supabase
       .from('courses')
       .select('id')
       .eq('owner_id', userId)
-      .eq('id', courseId)
+      .or(`code.ilike.%${ref}%,name.ilike.%${ref}%`)
+      .limit(1)
       .maybeSingle();
     return data?.id ?? null;
   }
+  const assertCourse = resolveCourse;
 
   return [
     {
@@ -54,7 +69,7 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
       },
       handler: async (args) => {
         const status = asString(args.status) ?? 'open';
-        const courseId = asString(args.course_id);
+        const courseId = await resolveCourse(asString(args.course_id));
         const limit = Math.min(100, asNumber(args.limit, 20));
         let q = supabase
           .from('tasks')
@@ -90,7 +105,7 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
       },
       handler: async (args) => {
         const query = asString(args.query) ?? '';
-        const courseId = asString(args.course_id);
+        const courseId = await resolveCourse(asString(args.course_id));
         const limit = Math.min(50, asNumber(args.limit, 10));
         let q = supabase
           .from('notes')
@@ -148,7 +163,7 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
         const from = asString(args.from);
         const to = asString(args.to);
         if (!from || !to) throw new Error('from and to are required');
-        const courseId = asString(args.course_id);
+        const courseId = await resolveCourse(asString(args.course_id));
         const limit = Math.min(200, asNumber(args.limit, 50));
         let q = supabase
           .from('events')

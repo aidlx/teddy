@@ -10,10 +10,14 @@ You have tools to read the user's data and to write to it. Use them freely for r
 - If the action is ambiguous, destructive, or requires inferring details ("move the OOP assignment"), first confirm with the user in natural language, wait for their yes/no, then act.
 - Never invent ids. If you need to act on an existing record, call a list/find tool first to get its id.
 
+Course ids:
+- course_id is ALWAYS a uuid (e.g. "9f3a…-…"). It is NEVER a course code like "716.009" and NEVER a name like "AI2".
+- To find the uuid: look in the Courses list in the CONTEXT block. Each line is formatted "id=<uuid>  <name> (<code>)". Match the user's words against name or code and copy the uuid from id=….
+- If no entry in Courses matches confidently, leave course_id null instead of guessing.
+
 Context handling:
-- A CONTEXT block below gives you the current time, what the user is doing right now (if they're in a scheduled event), their courses, and recent items. Use it to infer the right course_id when the user speaks vaguely ("we got homework"). If they're in "710.006 Computer Vision VU" and say "we have homework next week", link it to that course.
-- If you can't confidently match a course, leave course_id null instead of guessing.
-- Dates: the context gives you pre-computed UTC anchors for today, tomorrow, this week, and next week. When the user says "next week" or "this week", use those bounds verbatim as the from/to arguments for get_events — do NOT compute your own. For specific days like "Friday", count forward from the current date shown in the context. All due_at values you pass to tools must be ISO 8601 UTC.
+- A CONTEXT block below gives you the current time, what the user is doing right now (if they're in a scheduled event), their courses, and recent items. Use it to infer the right course_id when the user speaks vaguely ("we got homework"). If they're in "710.006 Computer Vision VU" and say "we have homework next week", link it to that course by looking up the uuid in Courses.
+- Dates: the context gives you pre-computed UTC anchors for today, tomorrow, this week, next week, and rest of semester. When the user says "next week", "this week", or "this semester" / "rest of semester" / "left this semester", use those bounds verbatim as the from/to arguments for get_events — do NOT compute your own. For specific days like "Friday", count forward from the current date shown in the context. All due_at values you pass to tools must be ISO 8601 UTC.
 
 Style: Short, direct, no filler. No greetings, no "I'd be happy to". Just do the thing.`;
 
@@ -35,7 +39,7 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
   const nextMonStart = new Date(thisMonStart.getTime() + 7 * 24 * 3600 * 1000);
   const mondayAfterNextStart = new Date(thisMonStart.getTime() + 14 * 24 * 3600 * 1000);
 
-  const [coursesRes, currentRes, upcomingRes, openTasksRes] = await Promise.all([
+  const [coursesRes, currentRes, upcomingRes, openTasksRes, lastEventRes] = await Promise.all([
     supabase
       .from('courses')
       .select('id, name, code')
@@ -63,6 +67,15 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
       .is('completed_at', null)
       .order('due_at', { ascending: true, nullsFirst: false })
       .limit(10),
+    // Latest scheduled event — proxy for semester end. Beats hardcoding
+    // academic-calendar dates that vary by country/university.
+    supabase
+      .from('events')
+      .select('start_at')
+      .eq('owner_id', userId)
+      .gte('start_at', nowIso)
+      .order('start_at', { ascending: false })
+      .limit(1),
   ]);
 
   const lines: string[] = ['CONTEXT'];
@@ -81,6 +94,14 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
   lines.push(`  tomorrow:        ${tomorrowStart.toISOString()} → ${dayAfterStart.toISOString()}`);
   lines.push(`  this week (Mon–Sun): ${thisMonStart.toISOString()} → ${nextMonStart.toISOString()}`);
   lines.push(`  next week (Mon–Sun): ${nextMonStart.toISOString()} → ${mondayAfterNextStart.toISOString()}`);
+  // End-of-semester = the last scheduled event we have on file, rounded up to
+  // the next day (exclusive bound for range queries). If we have no future
+  // events, fall back to 120 days out so the model still has *something*.
+  const lastEvIso = lastEventRes.data?.[0]?.start_at;
+  const semesterEnd = lastEvIso
+    ? new Date(new Date(lastEvIso).getTime() + 24 * 3600 * 1000)
+    : new Date(todayStart.getTime() + 120 * 24 * 3600 * 1000);
+  lines.push(`  rest of semester: ${nowIso} → ${semesterEnd.toISOString()}`);
 
   const currentEv = currentRes.data?.[0];
   if (currentEv) {
