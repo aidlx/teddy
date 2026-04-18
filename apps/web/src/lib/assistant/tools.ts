@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@teddy/supabase';
 import type { AgentTool } from '@teddy/ai';
+import { resolveTime } from './time';
 
 type DB = SupabaseClient<Database>;
 type TaskUpdate = Database['public']['Tables']['tasks']['Update'];
@@ -18,7 +19,11 @@ function asBool(v: unknown): boolean | undefined {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function buildTools(supabase: DB, userId: string): AgentTool[] {
+const TIME_HINT =
+  'Accepts: "2026-04-22T14:00" (local wall-clock), "2026-04-22" (local midnight), "+2h"/"-30m"/"+3d"/"+1w" (relative to now), or absolute ISO ("…Z" / "…+02:00"). Server resolves in the user\'s tz — do not do timezone math.';
+
+export function buildTools(supabase: DB, userId: string, userTz: string): AgentTool[] {
+  const resolve = (s: string | undefined) => (s ? resolveTime(s, userTz) : undefined);
   // Resolve a user-supplied course reference to a uuid. Accepts either a
   // proper uuid (verified to belong to this user) or a course code / name
   // fragment (case-insensitive match) — the model sometimes passes the code
@@ -150,8 +155,8 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
           parameters: {
             type: 'object',
             properties: {
-              from: { type: 'string', description: 'ISO 8601 UTC start.' },
-              to: { type: 'string', description: 'ISO 8601 UTC end.' },
+              from: { type: 'string', description: `Range start. ${TIME_HINT}` },
+              to: { type: 'string', description: `Range end. ${TIME_HINT}` },
               course_id: { type: 'string' },
               limit: { type: 'integer' },
             },
@@ -160,8 +165,8 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
         },
       },
       handler: async (args) => {
-        const from = asString(args.from);
-        const to = asString(args.to);
+        const from = resolve(asString(args.from));
+        const to = resolve(asString(args.to));
         if (!from || !to) throw new Error('from and to are required');
         const courseId = await resolveCourse(asString(args.course_id));
         const limit = Math.min(200, asNumber(args.limit, 50));
@@ -223,13 +228,13 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
         function: {
           name: 'create_task',
           description:
-            'Create a new task. due_at is ISO 8601 UTC or null. Confirm with user before calling unless they clearly directed the action.',
+            'Create a new task. Confirm with user before calling unless they clearly directed the action.',
           parameters: {
             type: 'object',
             properties: {
               title: { type: 'string' },
               description: { type: 'string' },
-              due_at: { type: 'string', description: 'ISO 8601 UTC' },
+              due_at: { type: 'string', description: TIME_HINT },
               course_id: { type: 'string' },
             },
             required: ['title'],
@@ -246,7 +251,7 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
             owner_id: userId,
             title,
             description: asString(args.description) ?? null,
-            due_at: asString(args.due_at) ?? null,
+            due_at: resolve(asString(args.due_at)) ?? null,
             course_id: courseId,
           })
           .select()
@@ -269,7 +274,7 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
               id: { type: 'string' },
               title: { type: 'string' },
               description: { type: 'string' },
-              due_at: { type: 'string' },
+              due_at: { type: 'string', description: TIME_HINT },
               course_id: { type: 'string' },
             },
             required: ['id'],
@@ -285,7 +290,7 @@ export function buildTools(supabase: DB, userId: string): AgentTool[] {
           if (v) patch.title = v;
         }
         if ('description' in args) patch.description = asString(args.description) ?? null;
-        if ('due_at' in args) patch.due_at = asString(args.due_at) ?? null;
+        if ('due_at' in args) patch.due_at = resolve(asString(args.due_at)) ?? null;
         if ('course_id' in args) patch.course_id = await assertCourse(asString(args.course_id));
         const { data, error } = await supabase
           .from('tasks')

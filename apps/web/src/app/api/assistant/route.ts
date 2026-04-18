@@ -13,6 +13,7 @@ import type { Json } from '@teddy/supabase';
 import { getServerSupabase } from '@/lib/supabase/server';
 import { buildTools } from '@/lib/assistant/tools';
 import { SYSTEM_PROMPT, buildContext } from '@/lib/assistant/context';
+import { resolveUserTz } from '@/lib/assistant/time';
 
 export const runtime = 'nodejs';
 
@@ -25,6 +26,9 @@ const RequestSchema = z.object({
   // vision parts; not persisted in message history (they'd bloat the DB, and
   // the assistant's textual response captures the salient interpretation).
   images: z.array(z.string().startsWith('data:image/')).max(6).optional(),
+  // Browser-reported IANA tz. Validated server-side; invalid/missing falls
+  // back to the user's calendar subscription tz, else UTC.
+  tz: z.string().max(64).optional(),
 });
 
 interface DbMessageRow {
@@ -113,9 +117,10 @@ export async function POST(request: NextRequest) {
     .single();
   if (userMsgErr) return new Response(userMsgErr.message, { status: 500 });
 
-  const context = await buildContext(supabase, user.id);
+  const userTz = await resolveUserTz(supabase, user.id, parsed.data.tz);
+  const context = await buildContext(supabase, user.id, userTz);
   const systemPrompt = `${SYSTEM_PROMPT}\n\n${context}`;
-  const tools = buildTools(supabase, user.id);
+  const tools = buildTools(supabase, user.id, userTz);
 
   // If the user attached images, wrap the message + images in a multipart
   // user content array (gpt-4o-mini supports vision). Otherwise plain string.

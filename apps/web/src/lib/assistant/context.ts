@@ -19,15 +19,24 @@ Context handling:
 - A CONTEXT block below gives you the current time, what the user is doing right now (if they're in a scheduled event), their courses, and recent items. Use it to infer the right course_id when the user speaks vaguely ("we got homework"). If they're in "710.006 Computer Vision VU" and say "we have homework next week", link it to that course by looking up the uuid in Courses.
 - Dates: the context gives you pre-computed UTC anchors for today, tomorrow, this week, next week, and rest of semester. When the user says "next week", "this week", or "this semester" / "rest of semester" / "left this semester", use those bounds verbatim as the from/to arguments for get_events — do NOT compute your own. For specific days like "Friday", count forward from the current date shown in the context.
 
-Timezones (IMPORTANT — read carefully):
-- The user's local timezone is shown as "User timezone: <IANA>" in the CONTEXT block. When the user says a wall-clock time like "14:00", "2pm", "Wednesday at 8", they ALWAYS mean that time in their local tz. NEVER interpret it as UTC.
-- Events shown in CONTEXT include both the raw UTC start_at AND a human-readable time in the user's local tz — use the local time to reason about "before X lecture" / "after Y", then convert the answer to UTC for the tool call.
-- All due_at / from / to values you pass to tools MUST be ISO 8601 UTC. To convert: take the wall-clock time the user meant, apply the UTC offset for their tz on that date (remember DST — e.g. Europe/Vienna is UTC+1 in winter, UTC+2 in summer). When unsure, pick an UTC value that corresponds to the user's intended local time; do not echo the number verbatim with a Z suffix.
-- Example: user is in Europe/Vienna (currently CEST, UTC+2) and says "remind me at 14:00 on April 22". Correct due_at is "2026-04-22T12:00:00Z", NOT "2026-04-22T14:00:00Z".
+Lecture / event times — ALWAYS tool-call, never trust prior turns:
+- When the user references a specific lecture, lab, exam, or any scheduled event ("before Wednesday's AI2 lecture", "after the CV lab", "when is the next ML lecture"), you MUST call get_events (or what_am_i_in_now for "right now" / "next") to fetch the authoritative time. Do NOT rely on times mentioned earlier in this conversation or on memory — the schedule can change, and prior messages may be stale or wrong.
+- The CONTEXT "Next 24h events" list is a hint, not a source of truth. If the user asks about something outside that window, or you are going to set a due_at relative to a lecture, call get_events first with an appropriate range (e.g. today's anchor → end-of-week) and filter by course_id when it narrows the result.
+- After the tool returns, use the event's start_at as the basis for due_at: pass the start_at verbatim as the due_at for "before/at the lecture" style reminders. If the user explicitly asked for an offset (e.g. "30 min before"), include that offset as part of the due_at they meant — but prefer passing the start_at itself unless the offset was stated.
+
+Times (due_at, from, to) — do NOT do timezone math. Pass strings in one of these forms and the server resolves them in the user's local tz:
+- "2026-04-22T14:00" — wall-clock time as the user said it (no Z, no offset). Use this for "Wednesday at 14:00", "tomorrow at 9am", etc.
+- "2026-04-22" — that date at midnight local.
+- "+2h", "+30m", "+3d", "+1w", "-1h" — relative to now. Use for "in 2 hours", "next week".
+- "2026-04-22T12:00:00Z" — absolute UTC. Only copy these verbatim from context anchors; don't construct them yourself.
 
 Style: Short, direct, no filler. No greetings, no "I'd be happy to". Just do the thing.`;
 
-export async function buildContext(supabase: DB, userId: string): Promise<string> {
+export async function buildContext(
+  supabase: DB,
+  userId: string,
+  userTz: string,
+): Promise<string> {
   const now = new Date();
   const nowIso = now.toISOString();
   const in24hIso = new Date(now.getTime() + 24 * 3600 * 1000).toISOString();
@@ -45,7 +54,7 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
   const nextMonStart = new Date(thisMonStart.getTime() + 7 * 24 * 3600 * 1000);
   const mondayAfterNextStart = new Date(thisMonStart.getTime() + 14 * 24 * 3600 * 1000);
 
-  const [coursesRes, currentRes, upcomingRes, openTasksRes, lastEventRes, tzRes] = await Promise.all([
+  const [coursesRes, currentRes, upcomingRes, openTasksRes, lastEventRes] = await Promise.all([
     supabase
       .from('courses')
       .select('id, name, code')
@@ -82,17 +91,8 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
       .gte('start_at', nowIso)
       .order('start_at', { ascending: false })
       .limit(1),
-    // User's timezone — first subscription's tz is our best guess.
-    supabase
-      .from('calendar_subscriptions')
-      .select('tz')
-      .eq('owner_id', userId)
-      .order('created_at')
-      .limit(1)
-      .maybeSingle(),
   ]);
 
-  const userTz = tzRes.data?.tz ?? 'UTC';
   const fmtLocal = (iso: string) =>
     new Date(iso).toLocaleString('en-GB', {
       weekday: 'short',
