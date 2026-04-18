@@ -1,5 +1,17 @@
-import { useState } from 'react';
-import { FlatList, StyleSheet, Text, TextInput, View, Pressable, Alert } from 'react-native';
+import { useRef, useState } from 'react';
+import {
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  Alert,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { Stack } from 'expo-router';
 import type { ChatMessage } from '@teddy/shared';
 import { supabase } from '@/lib/supabase';
@@ -9,6 +21,9 @@ export default function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const listRef = useRef<FlatList>(null);
+  const insets = useSafeAreaInsets();
+  const headerOffset = useHeaderHeight();
 
   async function send() {
     if (!input.trim() || sending) return;
@@ -37,12 +52,20 @@ export default function ChatScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? headerOffset : 0}
+    >
       <Stack.Screen options={{ title: 'Chat' }} />
       <FlatList
+        ref={listRef}
         data={messages}
         keyExtractor={(_, i) => String(i)}
         contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
         renderItem={({ item }) => (
           <View style={[styles.bubble, item.role === 'user' ? styles.user : styles.assistant]}>
             <Text style={item.role === 'user' ? styles.userText : styles.assistantText}>
@@ -52,7 +75,7 @@ export default function ChatScreen() {
         )}
         ListEmptyComponent={<Text style={styles.muted}>Send a message to start.</Text>}
       />
-      <View style={styles.inputRow}>
+      <View style={[styles.inputRow, { paddingBottom: 12 + insets.bottom }]}>
         <TextInput
           style={styles.input}
           value={input}
@@ -60,12 +83,13 @@ export default function ChatScreen() {
           placeholder="Type a message…"
           placeholderTextColor="#71717a"
           editable={!sending}
+          multiline
         />
         <Pressable style={styles.sendBtn} onPress={send} disabled={sending}>
           <Text style={styles.sendBtnText}>Send</Text>
         </Pressable>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
