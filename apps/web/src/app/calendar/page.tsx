@@ -103,6 +103,15 @@ export default function CalendarPage() {
     setCourses(c.data ?? []);
   }
 
+  async function readJson(res: Response): Promise<Record<string, unknown>> {
+    const text = await res.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return { error: text.slice(0, 200) || `HTTP ${res.status}` };
+    }
+  }
+
   async function addSubscription(ev: React.FormEvent) {
     ev.preventDefault();
     if (!name.trim() || !url.trim()) return;
@@ -113,9 +122,9 @@ export default function CalendarPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name.trim(), ical_url: url.trim() }),
     });
-    const data = await res.json();
+    const data = await readJson(res);
     if (!res.ok) {
-      setError(data.error ?? `Subscribe failed (${res.status})`);
+      setError(String(data.error ?? `Subscribe failed (${res.status})`));
     } else {
       setName('');
       setUrl('');
@@ -133,16 +142,16 @@ export default function CalendarPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subscription_id: id }),
     });
-    const data = await res.json();
-    if (!res.ok) setError(data.error ?? `Sync failed (${res.status})`);
+    const data = await readJson(res);
+    if (!res.ok) setError(String(data.error ?? `Sync failed (${res.status})`));
     else await loadAll();
     setSyncing(null);
   }
 
   async function removeSub(id: string) {
     const res = await fetch(`/api/calendar/subscriptions/${id}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) setError(data.error ?? `Delete failed (${res.status})`);
+    const data = await readJson(res);
+    if (!res.ok) setError(String(data.error ?? `Delete failed (${res.status})`));
     else await loadAll();
   }
 
