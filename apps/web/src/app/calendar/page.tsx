@@ -10,6 +10,7 @@ interface Subscription {
   ical_url: string;
   last_synced_at: string | null;
   last_error: string | null;
+  tz: string;
 }
 
 interface EventRow {
@@ -20,6 +21,7 @@ interface EventRow {
   end_at: string | null;
   all_day: boolean;
   course_id: string | null;
+  subscription_id: string | null;
 }
 
 interface Course {
@@ -36,6 +38,13 @@ interface TaskRow {
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function getTimezones(): string[] {
+  type IntlWithSupported = { supportedValuesOf?: (key: string) => string[] };
+  const values = (Intl as IntlWithSupported).supportedValuesOf?.('timeZone');
+  if (values && values.length > 0) return values;
+  return ['UTC', 'Europe/Vienna', 'Europe/London', 'America/New_York', 'America/Los_Angeles', 'Asia/Tokyo'];
+}
 
 function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -66,8 +75,32 @@ function sameDay(a: Date, b: Date) {
   );
 }
 
-function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+function fmtTime(iso: string, tz?: string) {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: tz,
+  });
+}
+
+// Extract Y/M/D in the given tz so day-grouping matches what the user sees,
+// not what the server's clock thinks. Without this, a 23:00 lecture in Vienna
+// would fall on the wrong day when the browser is in UTC.
+function dayKeyInTz(iso: string, tz?: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: tz,
+  }).formatToParts(new Date(iso));
+  const y = parts.find((p) => p.type === 'year')?.value;
+  const m = parts.find((p) => p.type === 'month')?.value;
+  const d = parts.find((p) => p.type === 'day')?.value;
+  return `${y}-${m}-${d}`;
+}
+
+function gridDayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export default function CalendarPage() {
@@ -118,10 +151,11 @@ export default function CalendarPage() {
     if (!name.trim() || !url.trim()) return;
     setAdding(true);
     setError(null);
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const res = await fetch('/api/calendar/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), ical_url: url.trim() }),
+      body: JSON.stringify({ name: name.trim(), ical_url: url.trim(), tz: browserTz }),
     });
     const data = await readJson(res);
     if (!res.ok) {
@@ -173,7 +207,28 @@ export default function CalendarPage() {
     else await loadAll();
   }
 
+  async function updateTz(id: string, tz: string) {
+    setError(null);
+    setSubs((prev) => prev.map((s) => (s.id === id ? { ...s, tz } : s)));
+    const res = await fetch(`/api/calendar/subscriptions/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tz }),
+    });
+    const data = await readJson(res);
+    if (!res.ok) {
+      setError(String(data.error ?? `Update failed (${res.status})`));
+      await loadAll();
+    }
+  }
+
   const coursesById = useMemo(() => new Map(courses.map((c) => [c.id, c] as const)), [courses]);
+  const subsById = useMemo(() => new Map(subs.map((s) => [s.id, s] as const)), [subs]);
+  // Display tz for things without a subscription (tasks, all-day default): use
+  // the first subscription's tz if any, otherwise the browser.
+  const displayTz = useMemo(() => {
+    return subs[0]?.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }, [subs]);
   const days = useMemo(() => buildMonthGrid(cursor), [cursor]);
   const today = new Date();
 
@@ -183,17 +238,17 @@ export default function CalendarPage() {
 
   const itemsByDay = useMemo(() => {
     const map = new Map<string, CellItem[]>();
-    const key = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
     for (const ev of events) {
-      const d = new Date(ev.start_at);
-      const k = key(d);
+      const evTz = ev.subscription_id ? subsById.get(ev.subscription_id)?.tz : undefined;
+      const tz = evTz ?? displayTz;
+      const k = dayKeyInTz(ev.start_at, tz);
       const arr = map.get(k) ?? [];
       const course = ev.course_id ? coursesById.get(ev.course_id) : null;
       arr.push({
         kind: 'event',
         id: ev.id,
         title: ev.title,
-        time: ev.all_day ? null : fmtTime(ev.start_at),
+        time: ev.all_day ? null : fmtTime(ev.start_at, tz),
         color: course?.color ?? null,
         allDay: ev.all_day,
       });
@@ -201,19 +256,16 @@ export default function CalendarPage() {
     }
     for (const t of tasks) {
       if (!t.due_at) continue;
-      const d = new Date(t.due_at);
-      const k = key(d);
+      const k = dayKeyInTz(t.due_at, displayTz);
       const arr = map.get(k) ?? [];
       const course = t.course_id ? coursesById.get(t.course_id) : null;
       arr.push({ kind: 'task', id: t.id, title: t.title, color: course?.color ?? null });
       map.set(k, arr);
     }
     return map;
-  }, [events, tasks, coursesById]);
+  }, [events, tasks, coursesById, subsById, displayTz]);
 
-  const selectedItems = selected
-    ? itemsByDay.get(`${selected.getFullYear()}-${selected.getMonth()}-${selected.getDate()}`) ?? []
-    : [];
+  const selectedItems = selected ? itemsByDay.get(gridDayKey(selected)) ?? [] : [];
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-4 py-6 md:px-6 md:py-10">
@@ -303,10 +355,24 @@ export default function CalendarPage() {
                     synced {new Date(s.last_synced_at).toLocaleString()}
                   </span>
                 ) : null}
+                <label className="ml-auto flex items-center gap-1 text-xs text-zinc-500">
+                  <span>tz</span>
+                  <select
+                    value={s.tz}
+                    onChange={(e) => updateTz(s.id, e.target.value)}
+                    className="rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 text-xs text-zinc-700 transition focus:border-amber-400/50 focus:outline-none focus:ring-2 focus:ring-amber-400/20 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-200"
+                  >
+                    {getTimezones().map((z) => (
+                      <option key={z} value={z}>
+                        {z}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   onClick={() => syncOne(s.id)}
                   disabled={syncing === s.id}
-                  className="ml-auto text-xs text-zinc-600 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-900 hover:decoration-zinc-500 disabled:opacity-40 dark:text-zinc-400 dark:decoration-zinc-700 dark:hover:text-zinc-100"
+                  className="text-xs text-zinc-600 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-900 hover:decoration-zinc-500 disabled:opacity-40 dark:text-zinc-400 dark:decoration-zinc-700 dark:hover:text-zinc-100"
                 >
                   {syncing === s.id ? 'Syncing…' : 'Sync'}
                 </button>
@@ -364,7 +430,7 @@ export default function CalendarPage() {
             const inMonth = d.getMonth() === cursor.getMonth();
             const isToday = sameDay(d, today);
             const isSelected = selected && sameDay(d, selected);
-            const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+            const key = gridDayKey(d);
             const items = itemsByDay.get(key) ?? [];
             return (
               <button
@@ -442,7 +508,9 @@ export default function CalendarPage() {
                 )}
                 <span className="truncate text-zinc-900 dark:text-zinc-100">{it.title}</span>
                 {it.kind === 'event' && it.time && (
-                  <span className="ml-auto flex-none text-xs text-zinc-500">{it.time}</span>
+                  <span className="ml-auto flex-none text-xs tabular-nums text-zinc-500">
+                    {it.time}
+                  </span>
                 )}
               </li>
             ))}

@@ -23,6 +23,7 @@ export type Database = {
           last_synced_at: string | null
           name: string
           owner_id: string
+          tz: string
         }
         Insert: {
           created_at?: string
@@ -32,6 +33,7 @@ export type Database = {
           last_synced_at?: string | null
           name: string
           owner_id: string
+          tz?: string
         }
         Update: {
           created_at?: string
@@ -41,6 +43,7 @@ export type Database = {
           last_synced_at?: string | null
           name?: string
           owner_id?: string
+          tz?: string
         }
         Relationships: []
       }

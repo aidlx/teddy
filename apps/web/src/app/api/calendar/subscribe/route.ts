@@ -8,6 +8,7 @@ export const runtime = 'nodejs';
 const SubscribeSchema = z.object({
   name: z.string().min(1).max(120),
   ical_url: z.string().url(),
+  tz: z.string().min(1).max(64).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -30,6 +31,7 @@ export async function POST(request: NextRequest) {
       owner_id: user.id,
       name: parsed.data.name,
       ical_url: url,
+      ...(parsed.data.tz ? { tz: parsed.data.tz } : {}),
     })
     .select()
     .single();
