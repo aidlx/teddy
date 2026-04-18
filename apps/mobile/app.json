@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Teddy",
+    "slug": "teddy",
+    "scheme": "teddy",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.teddy.app"
+    },
+    "android": {
+      "package": "com.teddy.app"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
