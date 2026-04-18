@@ -12,6 +12,7 @@ interface Task {
   due_at: string | null;
   completed_at: string | null;
   course_id: string | null;
+  capture_id: string | null;
   created_at: string;
 }
 
@@ -143,6 +144,15 @@ export default function TasksPage() {
                 <span className={`ml-auto text-xs ${overdue ? 'text-red-400' : 'text-zinc-500'}`}>
                   {formatRelative(t.due_at)}
                 </span>
+              )}
+              {t.capture_id && (
+                <Link
+                  href={`/captures/${t.capture_id}`}
+                  className={`text-xs text-zinc-600 hover:text-zinc-300 ${t.due_at ? '' : 'ml-auto'}`}
+                  title="View source capture"
+                >
+                  source
+                </Link>
               )}
               <button
                 onClick={() => deleteTask(t.id)}

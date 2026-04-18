@@ -45,10 +45,15 @@ export const ParsedNoteSchema = z.object({
   course_id: z.string().uuid().nullable().optional(),
 });
 
-export const ParsedCaptureSchema = z.discriminatedUnion('type', [
+export const ParsedItemSchema = z.discriminatedUnion('type', [
   ParsedTaskSchema,
   ParsedNoteSchema,
 ]);
+
+// The LLM emits { items: [...] } — object at the top level is required by JSON mode.
+export const ParsedCaptureSchema = z.object({
+  items: z.array(ParsedItemSchema).min(1),
+});
 
 export const CaptureRequestSchema = z.object({
   text: z.string().min(1).max(5000),

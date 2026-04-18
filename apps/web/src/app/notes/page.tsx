@@ -10,6 +10,7 @@ interface Note {
   title: string | null;
   content: string;
   course_id: string | null;
+  capture_id: string | null;
   created_at: string;
 }
 
@@ -97,6 +98,15 @@ export default function NotesPage() {
                 <span className="ml-auto text-xs text-zinc-500">
                   {formatRelative(n.created_at)}
                 </span>
+                {n.capture_id && (
+                  <Link
+                    href={`/captures/${n.capture_id}`}
+                    className="text-xs text-zinc-600 hover:text-zinc-300"
+                    title="View source capture"
+                  >
+                    source
+                  </Link>
+                )}
                 <button
                   onClick={() => deleteNote(n.id)}
                   className="text-xs text-zinc-600 hover:text-red-400"

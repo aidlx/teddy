@@ -82,6 +82,9 @@ export default async function HomePage() {
           <Link href="/courses" className="hover:text-zinc-100">
             Courses
           </Link>
+          <Link href="/captures" className="hover:text-zinc-100">
+            History
+          </Link>
           <SignOutButton />
         </nav>
       </header>

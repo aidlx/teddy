@@ -3,16 +3,18 @@ import { getOpenAI } from './client';
 
 const MODEL = 'gpt-4o-mini';
 
-const SYSTEM_PROMPT = `You are Teddy, a study assistant for students. Classify the user's short message as either a task (something to do with a due date) or a note (information to remember).
+const SYSTEM_PROMPT = `You are Teddy, a study assistant for students. Break the user's short message into one or more items, each classified as either a task (something to do, with or without a due date) or a note (information to remember).
 
 Rules:
-- If the message mentions a deadline, homework, assignment, exam, or something the user must do, it's a "task".
-- Otherwise it's a "note".
+- A single message can contain multiple items (e.g. "read chapter 3 for CS101 before Friday AND the teacher mentioned the midterm is on the 20th" = one task + one note, or two tasks). Emit each as a separate item.
+- If a sentence describes a deadline, homework, assignment, exam, or something the user must do, it's a "task".
+- If it describes information to remember (a fact, a topic covered, a definition), it's a "note".
 - For tasks, extract the due date in ISO 8601 UTC. Resolve relative dates like "tomorrow", "Friday", "next lecture" using the provided reference time. If you truly cannot infer a due date, leave due_at null.
-- Assign course_id by matching the message to one of the provided courses (by name, code, or topic). If no course matches, leave course_id null.
+- Assign course_id by matching the item to one of the provided courses (by name, code, or topic). If no course matches, leave course_id null. NEVER invent a course id.
 - title is a concise 3-10 word summary of the action (tasks) or topic (notes).
 - For notes, put the full useful content in "content". Keep it close to the original, just cleaned up.
 - Do NOT invent due dates, course assignments, or details not in the message.
+- If the message is genuinely one thing, emit one item. Don't split artificially.
 
 Respond ONLY with the JSON object. No prose.`;
 
@@ -42,23 +44,25 @@ User message:
 ${text}
 """
 
-Respond with a single JSON object matching one of these shapes:
+Respond with a single JSON object of shape:
 
 {
-  "type": "task",
-  "title": string,
-  "description": string | null,
-  "due_at": string | null,   // ISO 8601 UTC, or null
-  "course_id": string | null // one of the course ids above, or null
-}
-
-OR
-
-{
-  "type": "note",
-  "title": string | null,
-  "content": string,
-  "course_id": string | null
+  "items": [
+    // one or more of the shapes below
+    {
+      "type": "task",
+      "title": string,
+      "description": string | null,
+      "due_at": string | null,   // ISO 8601 UTC, or null
+      "course_id": string | null // one of the course ids above, or null
+    },
+    {
+      "type": "note",
+      "title": string | null,
+      "content": string,
+      "course_id": string | null
+    }
+  ]
 }`;
 
   const completion = await openai.chat.completions.create({

@@ -5,6 +5,7 @@ import type {
   ChatResponseSchema,
   CourseHintSchema,
   ParsedCaptureSchema,
+  ParsedItemSchema,
   ParsedTaskSchema,
   ParsedNoteSchema,
   CaptureRequestSchema,
@@ -16,6 +17,7 @@ export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
 export type CourseHint = z.infer<typeof CourseHintSchema>;
 export type ParsedCapture = z.infer<typeof ParsedCaptureSchema>;
+export type ParsedItem = z.infer<typeof ParsedItemSchema>;
 export type ParsedTask = z.infer<typeof ParsedTaskSchema>;
 export type ParsedNote = z.infer<typeof ParsedNoteSchema>;
 export type CaptureRequest = z.infer<typeof CaptureRequestSchema>;
