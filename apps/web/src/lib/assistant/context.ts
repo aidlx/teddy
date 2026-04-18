@@ -17,7 +17,13 @@ Course ids:
 
 Context handling:
 - A CONTEXT block below gives you the current time, what the user is doing right now (if they're in a scheduled event), their courses, and recent items. Use it to infer the right course_id when the user speaks vaguely ("we got homework"). If they're in "710.006 Computer Vision VU" and say "we have homework next week", link it to that course by looking up the uuid in Courses.
-- Dates: the context gives you pre-computed UTC anchors for today, tomorrow, this week, next week, and rest of semester. When the user says "next week", "this week", or "this semester" / "rest of semester" / "left this semester", use those bounds verbatim as the from/to arguments for get_events — do NOT compute your own. For specific days like "Friday", count forward from the current date shown in the context. All due_at values you pass to tools must be ISO 8601 UTC.
+- Dates: the context gives you pre-computed UTC anchors for today, tomorrow, this week, next week, and rest of semester. When the user says "next week", "this week", or "this semester" / "rest of semester" / "left this semester", use those bounds verbatim as the from/to arguments for get_events — do NOT compute your own. For specific days like "Friday", count forward from the current date shown in the context.
+
+Timezones (IMPORTANT — read carefully):
+- The user's local timezone is shown as "User timezone: <IANA>" in the CONTEXT block. When the user says a wall-clock time like "14:00", "2pm", "Wednesday at 8", they ALWAYS mean that time in their local tz. NEVER interpret it as UTC.
+- Events shown in CONTEXT include both the raw UTC start_at AND a human-readable time in the user's local tz — use the local time to reason about "before X lecture" / "after Y", then convert the answer to UTC for the tool call.
+- All due_at / from / to values you pass to tools MUST be ISO 8601 UTC. To convert: take the wall-clock time the user meant, apply the UTC offset for their tz on that date (remember DST — e.g. Europe/Vienna is UTC+1 in winter, UTC+2 in summer). When unsure, pick an UTC value that corresponds to the user's intended local time; do not echo the number verbatim with a Z suffix.
+- Example: user is in Europe/Vienna (currently CEST, UTC+2) and says "remind me at 14:00 on April 22". Correct due_at is "2026-04-22T12:00:00Z", NOT "2026-04-22T14:00:00Z".
 
 Style: Short, direct, no filler. No greetings, no "I'd be happy to". Just do the thing.`;
 
@@ -39,7 +45,7 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
   const nextMonStart = new Date(thisMonStart.getTime() + 7 * 24 * 3600 * 1000);
   const mondayAfterNextStart = new Date(thisMonStart.getTime() + 14 * 24 * 3600 * 1000);
 
-  const [coursesRes, currentRes, upcomingRes, openTasksRes, lastEventRes] = await Promise.all([
+  const [coursesRes, currentRes, upcomingRes, openTasksRes, lastEventRes, tzRes] = await Promise.all([
     supabase
       .from('courses')
       .select('id, name, code')
@@ -76,19 +82,33 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
       .gte('start_at', nowIso)
       .order('start_at', { ascending: false })
       .limit(1),
+    // User's timezone — first subscription's tz is our best guess.
+    supabase
+      .from('calendar_subscriptions')
+      .select('tz')
+      .eq('owner_id', userId)
+      .order('created_at')
+      .limit(1)
+      .maybeSingle(),
   ]);
 
-  const lines: string[] = ['CONTEXT'];
-  lines.push(
-    `Now: ${nowIso} (${now.toLocaleString(undefined, {
-      weekday: 'long',
+  const userTz = tzRes.data?.tz ?? 'UTC';
+  const fmtLocal = (iso: string) =>
+    new Date(iso).toLocaleString('en-GB', {
+      weekday: 'short',
       year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
       minute: '2-digit',
-    })})`,
-  );
+      hour12: false,
+      timeZone: userTz,
+    });
+
+  const lines: string[] = ['CONTEXT'];
+  lines.push(`User timezone: ${userTz}`);
+  lines.push(`Now (UTC):   ${nowIso}`);
+  lines.push(`Now (local): ${fmtLocal(nowIso)}`);
   lines.push('Date anchors (UTC, use these verbatim as from/to bounds):');
   lines.push(`  today:           ${todayStart.toISOString()} → ${tomorrowStart.toISOString()}`);
   lines.push(`  tomorrow:        ${tomorrowStart.toISOString()} → ${dayAfterStart.toISOString()}`);
@@ -105,8 +125,11 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
 
   const currentEv = currentRes.data?.[0];
   if (currentEv) {
+    const until = currentEv.end_at
+      ? `${fmtLocal(currentEv.end_at)} local / ${currentEv.end_at}`
+      : '?';
     lines.push(
-      `Currently in: "${currentEv.title}"${currentEv.location ? ` at ${currentEv.location}` : ''} (until ${currentEv.end_at ?? '?'}). course_id=${currentEv.course_id ?? 'null'}`,
+      `Currently in: "${currentEv.title}"${currentEv.location ? ` at ${currentEv.location}` : ''} (until ${until}). course_id=${currentEv.course_id ?? 'null'}`,
     );
   } else {
     lines.push('Currently in: nothing scheduled');
@@ -122,15 +145,10 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
   }
 
   if (upcomingRes.data && upcomingRes.data.length > 0) {
-    lines.push('Next 24h events:');
+    lines.push('Next 24h events (local | UTC):');
     for (const e of upcomingRes.data) {
-      const when = new Date(e.start_at).toLocaleString(undefined, {
-        weekday: 'short',
-        hour: 'numeric',
-        minute: '2-digit',
-      });
       lines.push(
-        `  - ${when}: ${e.title}${e.location ? ` @ ${e.location}` : ''} course_id=${e.course_id ?? 'null'}`,
+        `  - ${fmtLocal(e.start_at)} | ${e.start_at}: ${e.title}${e.location ? ` @ ${e.location}` : ''} course_id=${e.course_id ?? 'null'}`,
       );
     }
   }
@@ -138,8 +156,9 @@ export async function buildContext(supabase: DB, userId: string): Promise<string
   if (openTasksRes.data && openTasksRes.data.length > 0) {
     lines.push('Open tasks:');
     for (const t of openTasksRes.data) {
+      const due = t.due_at ? ` (due ${fmtLocal(t.due_at)} local / ${t.due_at})` : '';
       lines.push(
-        `  - id=${t.id}  ${t.title}${t.due_at ? ` (due ${t.due_at})` : ''} course_id=${t.course_id ?? 'null'}`,
+        `  - id=${t.id}  ${t.title}${due} course_id=${t.course_id ?? 'null'}`,
       );
     }
   }
