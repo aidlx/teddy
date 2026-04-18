@@ -74,30 +74,37 @@ export default function TasksPage() {
   });
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-6 py-8">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Tasks</h1>
-        <Link href="/" className="text-sm text-zinc-400 hover:text-zinc-200">
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-4 py-6 md:px-6 md:py-10">
+      <header className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Tasks</h1>
+        <Link
+          href="/"
+          className="text-sm text-zinc-400 transition hover:text-zinc-100"
+        >
           ← Home
         </Link>
-      </div>
+      </header>
 
-      <div className="flex flex-wrap gap-2">
-        {(['open', 'done', 'all'] as const).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`rounded-md px-3 py-1 text-xs ${
-              filter === f ? 'bg-white text-black' : 'border border-zinc-700 text-zinc-300'
-            }`}
-          >
-            {f}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-900/40 p-0.5">
+          {(['open', 'done', 'all'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`rounded-md px-3 py-1 text-xs capitalize transition ${
+                filter === f
+                  ? 'bg-amber-400 text-zinc-950'
+                  : 'text-zinc-400 hover:text-zinc-100'
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
         <select
           value={courseFilter}
           onChange={(e) => setCourseFilter(e.target.value)}
-          className="rounded-md border border-zinc-700 bg-transparent px-2 py-1 text-xs"
+          className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-700 focus:border-amber-400/40 focus:outline-none focus:ring-2 focus:ring-amber-400/10"
         >
           <option value="">All courses</option>
           {courses.map((c) => (
@@ -108,12 +115,16 @@ export default function TasksPage() {
         </select>
       </div>
 
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && (
+        <p className="rounded-lg border border-rose-900/40 bg-rose-950/20 px-3 py-2 text-sm text-rose-300">
+          {error}
+        </p>
+      )}
 
-      <ul className="flex flex-col gap-1">
+      <ul className="flex flex-col gap-1.5">
         {filtered.length === 0 && (
-          <li className="rounded-md border border-dashed border-zinc-800 px-4 py-6 text-center text-sm text-zinc-500">
-            No tasks.
+          <li className="rounded-xl border border-dashed border-zinc-900 bg-zinc-950/40 px-4 py-8 text-center text-sm text-zinc-500">
+            No tasks here yet.
           </li>
         )}
         {filtered.map((t) => {
@@ -122,33 +133,37 @@ export default function TasksPage() {
           return (
             <li
               key={t.id}
-              className="flex items-center gap-2 rounded-md border border-zinc-800 px-3 py-2 text-sm"
+              className="group flex items-center gap-2.5 rounded-xl border border-zinc-900 bg-zinc-950/40 px-4 py-2.5 text-sm transition hover:border-zinc-800 hover:bg-zinc-900/40"
             >
               <input
                 type="checkbox"
                 checked={!!t.completed_at}
                 onChange={() => toggleComplete(t)}
-                className="h-4 w-4 cursor-pointer"
+                className="h-4 w-4 flex-none cursor-pointer accent-amber-400"
               />
               {course && (
                 <span
-                  className="h-2 w-2 rounded-full"
+                  className="h-2 w-2 flex-none rounded-full"
                   style={{ backgroundColor: course.color ?? '#6366f1' }}
                   title={course.name}
                 />
               )}
-              <span className={t.completed_at ? 'text-zinc-500 line-through' : ''}>
+              <span
+                className={`truncate ${t.completed_at ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}
+              >
                 {t.title}
               </span>
               {t.due_at && (
-                <span className={`ml-auto text-xs ${overdue ? 'text-red-400' : 'text-zinc-500'}`}>
+                <span
+                  className={`ml-auto flex-none text-xs ${overdue ? 'text-rose-400' : 'text-zinc-500'}`}
+                >
                   {formatRelative(t.due_at)}
                 </span>
               )}
               {t.capture_id && (
                 <Link
                   href={`/captures/${t.capture_id}`}
-                  className={`text-xs text-zinc-600 hover:text-zinc-300 ${t.due_at ? '' : 'ml-auto'}`}
+                  className={`flex-none text-xs text-zinc-600 transition hover:text-zinc-300 ${t.due_at ? '' : 'ml-auto'}`}
                   title="View source capture"
                 >
                   source
@@ -156,7 +171,8 @@ export default function TasksPage() {
               )}
               <button
                 onClick={() => deleteTask(t.id)}
-                className="text-xs text-zinc-600 hover:text-red-400"
+                className="flex-none text-lg leading-none text-zinc-700 transition hover:text-rose-400"
+                aria-label="Delete task"
               >
                 ×
               </button>

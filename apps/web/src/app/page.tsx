@@ -15,11 +15,20 @@ export default async function HomePage() {
   if (!user) {
     return (
       <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center gap-6 px-6">
-        <h1 className="text-4xl font-semibold tracking-tight">Teddy</h1>
-        <p className="text-center text-zinc-400">Your study assistant.</p>
+        <div className="flex flex-col items-center gap-2">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-400/10 ring-1 ring-amber-400/20">
+            <span className="text-3xl" aria-hidden>
+              🧸
+            </span>
+          </div>
+          <h1 className="text-4xl font-semibold tracking-tight">Teddy</h1>
+          <p className="text-center text-sm text-zinc-400">
+            Your study assistant. Capture what happens in class — Teddy keeps it organized.
+          </p>
+        </div>
         <Link
           href="/login"
-          className="rounded-md bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200"
+          className="rounded-lg bg-amber-400 px-5 py-2.5 text-sm font-medium text-zinc-950 shadow-lg shadow-amber-400/20 transition hover:bg-amber-300"
         >
           Sign in
         </Link>
@@ -47,17 +56,17 @@ export default async function HomePage() {
   const notes = recentNotes ?? [];
   const hasCourses = (courses ?? []).length > 0;
 
-  // If no courses yet, nudge onboarding.
   if (!hasCourses) {
     return (
       <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center gap-6 px-6">
-        <h1 className="text-3xl font-semibold">Welcome to Teddy</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Welcome to Teddy</h1>
         <p className="text-zinc-400">
-          Start by adding the courses you&apos;re taking. Teddy uses them to understand what you capture.
+          Start by adding the courses you&apos;re taking. Teddy uses them to understand what you
+          capture.
         </p>
         <Link
           href="/courses"
-          className="self-start rounded-md bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200"
+          className="self-start rounded-lg bg-amber-400 px-5 py-2.5 text-sm font-medium text-zinc-950 shadow-lg shadow-amber-400/20 transition hover:bg-amber-300"
         >
           Add courses
         </Link>
@@ -69,22 +78,21 @@ export default async function HomePage() {
   const dueSoon = tasks.filter((t) => !isOverdue(t.due_at));
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-8 px-6 py-8">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Teddy</h1>
-        <nav className="flex gap-4 text-sm text-zinc-400">
-          <Link href="/tasks" className="hover:text-zinc-100">
-            Tasks
-          </Link>
-          <Link href="/notes" className="hover:text-zinc-100">
-            Notes
-          </Link>
-          <Link href="/courses" className="hover:text-zinc-100">
-            Courses
-          </Link>
-          <Link href="/captures" className="hover:text-zinc-100">
-            History
-          </Link>
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-4 py-6 md:gap-8 md:px-6 md:py-10">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <Link href="/" className="flex items-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-400/10 ring-1 ring-amber-400/20">
+            <span className="text-base" aria-hidden>
+              🧸
+            </span>
+          </span>
+          <span className="text-lg font-semibold tracking-tight">Teddy</span>
+        </Link>
+        <nav className="flex items-center gap-1 text-sm">
+          <NavLink href="/tasks">Tasks</NavLink>
+          <NavLink href="/notes">Notes</NavLink>
+          <NavLink href="/courses">Courses</NavLink>
+          <NavLink href="/captures">History</NavLink>
           <SignOutButton />
         </nav>
       </header>
@@ -92,59 +100,107 @@ export default async function HomePage() {
       <CaptureBox />
 
       {overdue.length > 0 && (
-        <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium text-red-400">Overdue</h2>
-          <ul className="flex flex-col gap-1">
+        <section className="flex flex-col gap-3">
+          <SectionHeading color="rose">Overdue</SectionHeading>
+          <ul className="flex flex-col gap-1.5">
             {overdue.map((t) => (
-              <TaskItem key={t.id} task={t} course={t.course_id ? coursesById.get(t.course_id) ?? null : null} overdue />
+              <TaskItem
+                key={t.id}
+                task={t}
+                course={t.course_id ? coursesById.get(t.course_id) ?? null : null}
+                overdue
+              />
             ))}
           </ul>
         </section>
       )}
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-400">Open tasks</h2>
+      <section className="flex flex-col gap-3">
+        <SectionHeading>Open tasks</SectionHeading>
         {dueSoon.length === 0 ? (
-          <p className="text-sm text-zinc-500">Nothing due. Nice.</p>
+          <EmptyState>Nothing due. Nice.</EmptyState>
         ) : (
-          <ul className="flex flex-col gap-1">
+          <ul className="flex flex-col gap-1.5">
             {dueSoon.slice(0, 10).map((t) => (
-              <TaskItem key={t.id} task={t} course={t.course_id ? coursesById.get(t.course_id) ?? null : null} />
+              <TaskItem
+                key={t.id}
+                task={t}
+                course={t.course_id ? coursesById.get(t.course_id) ?? null : null}
+              />
             ))}
           </ul>
         )}
       </section>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-400">Recent notes</h2>
+      <section className="flex flex-col gap-3">
+        <SectionHeading>Recent notes</SectionHeading>
         {notes.length === 0 ? (
-          <p className="text-sm text-zinc-500">Capture something above.</p>
+          <EmptyState>Capture something above.</EmptyState>
         ) : (
-          <ul className="flex flex-col gap-1">
-            {notes.map((n) => (
-              <li
-                key={n.id}
-                className="rounded-md border border-zinc-800 px-3 py-2 text-sm"
-              >
-                <div className="flex items-center gap-2">
-                  {n.course_id && coursesById.get(n.course_id) && (
-                    <span
-                      className="h-2 w-2 rounded-full"
-                      style={{ backgroundColor: coursesById.get(n.course_id)?.color ?? '#6366f1' }}
-                    />
-                  )}
-                  <span className="font-medium">{n.title ?? 'Note'}</span>
-                  <span className="ml-auto text-xs text-zinc-500">
-                    {formatRelative(n.created_at)}
-                  </span>
-                </div>
-                <p className="mt-1 line-clamp-2 text-zinc-400">{n.content}</p>
-              </li>
-            ))}
+          <ul className="flex flex-col gap-1.5">
+            {notes.map((n) => {
+              const course = n.course_id ? coursesById.get(n.course_id) : null;
+              return (
+                <li
+                  key={n.id}
+                  className="rounded-xl border border-zinc-900 bg-zinc-950/40 px-4 py-3 text-sm transition hover:border-zinc-800 hover:bg-zinc-900/40"
+                >
+                  <div className="flex items-center gap-2">
+                    {course && (
+                      <span
+                        className="h-2 w-2 flex-none rounded-full"
+                        style={{ backgroundColor: course.color ?? '#6366f1' }}
+                        title={course.name}
+                      />
+                    )}
+                    <span className="font-medium text-zinc-100">{n.title ?? 'Note'}</span>
+                    <span className="ml-auto flex-none text-xs text-zinc-500">
+                      {formatRelative(n.created_at)}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-zinc-400">{n.content}</p>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
     </main>
+  );
+}
+
+function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="rounded-md px-2.5 py-1.5 text-zinc-400 transition hover:bg-zinc-900/60 hover:text-zinc-100"
+    >
+      {children}
+    </Link>
+  );
+}
+
+function SectionHeading({
+  children,
+  color = 'zinc',
+}: {
+  children: React.ReactNode;
+  color?: 'zinc' | 'rose';
+}) {
+  const cls =
+    color === 'rose'
+      ? 'text-rose-400'
+      : 'text-zinc-500';
+  return (
+    <h2 className={`text-xs font-semibold uppercase tracking-wider ${cls}`}>{children}</h2>
+  );
+}
+
+function EmptyState({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-dashed border-zinc-900 bg-zinc-950/40 px-4 py-6 text-center text-sm text-zinc-500">
+      {children}
+    </div>
   );
 }
 
@@ -158,17 +214,19 @@ function TaskItem({
   overdue?: boolean;
 }) {
   return (
-    <li className="flex items-center gap-2 rounded-md border border-zinc-800 px-3 py-2 text-sm">
+    <li className="flex items-center gap-2 rounded-xl border border-zinc-900 bg-zinc-950/40 px-4 py-2.5 text-sm transition hover:border-zinc-800 hover:bg-zinc-900/40">
       {course && (
         <span
-          className="h-2 w-2 rounded-full"
+          className="h-2 w-2 flex-none rounded-full"
           style={{ backgroundColor: course.color ?? '#6366f1' }}
           title={course.name}
         />
       )}
-      <span>{task.title}</span>
+      <span className="truncate">{task.title}</span>
       {task.due_at && (
-        <span className={`ml-auto text-xs ${overdue ? 'text-red-400' : 'text-zinc-500'}`}>
+        <span
+          className={`ml-auto flex-none text-xs ${overdue ? 'text-rose-400' : 'text-zinc-500'}`}
+        >
           {formatRelative(task.due_at)}
         </span>
       )}
@@ -185,7 +243,10 @@ async function SignOutButton() {
   }
   return (
     <form action={signOut}>
-      <button type="submit" className="hover:text-zinc-100">
+      <button
+        type="submit"
+        className="rounded-md px-2.5 py-1.5 text-zinc-400 transition hover:bg-zinc-900/60 hover:text-zinc-100"
+      >
         Sign out
       </button>
     </form>

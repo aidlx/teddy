@@ -78,73 +78,94 @@ export default function CoursesPage() {
     else await loadCourses();
   }
 
+  const inputCls =
+    'rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 transition focus:border-amber-400/40 focus:outline-none focus:ring-2 focus:ring-amber-400/10';
+
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-6 py-8">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Courses</h1>
-        <Link href="/" className="text-sm text-zinc-400 hover:text-zinc-200">
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-4 py-6 md:px-6 md:py-10">
+      <header className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Courses</h1>
+        <Link
+          href="/"
+          className="text-sm text-zinc-400 transition hover:text-zinc-100"
+        >
           ← Home
         </Link>
-      </div>
+      </header>
 
-      <form onSubmit={addCourse} className="flex flex-col gap-2 rounded-md border border-zinc-800 p-4">
-        <h2 className="text-sm font-medium text-zinc-400">Add a course</h2>
+      <form
+        onSubmit={addCourse}
+        className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 md:p-5"
+      >
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+          Add a course
+        </h2>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Course name (e.g. Intro to Algorithms)"
           required
-          className="rounded-md border border-zinc-700 bg-transparent px-3 py-2 text-sm"
+          className={inputCls}
         />
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-3 sm:flex-row">
           <input
             value={code}
             onChange={(e) => setCode(e.target.value)}
             placeholder="Code (CS101)"
-            className="flex-1 rounded-md border border-zinc-700 bg-transparent px-3 py-2 text-sm"
+            className={`flex-1 ${inputCls}`}
           />
           <input
             value={schedule}
             onChange={(e) => setSchedule(e.target.value)}
             placeholder="Schedule (Mon/Wed 10am)"
-            className="flex-1 rounded-md border border-zinc-700 bg-transparent px-3 py-2 text-sm"
+            className={`flex-1 ${inputCls}`}
           />
         </div>
         <button
           type="submit"
-          disabled={loading}
-          className="mt-1 self-start rounded-md bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:opacity-50"
+          disabled={loading || !name.trim()}
+          className="mt-1 self-start rounded-lg bg-amber-400 px-4 py-2 text-sm font-medium text-zinc-950 shadow-sm shadow-amber-400/20 transition hover:bg-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-400/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {loading ? 'Adding…' : 'Add course'}
         </button>
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && (
+          <p className="rounded-lg border border-rose-900/40 bg-rose-950/20 px-3 py-2 text-sm text-rose-300">
+            {error}
+          </p>
+        )}
       </form>
 
       <ul className="flex flex-col gap-2">
         {courses.length === 0 && (
-          <li className="rounded-md border border-dashed border-zinc-800 px-4 py-6 text-center text-sm text-zinc-500">
+          <li className="rounded-xl border border-dashed border-zinc-900 bg-zinc-950/40 px-4 py-8 text-center text-sm text-zinc-500">
             No courses yet. Add one above.
           </li>
         )}
         {courses.map((c) => (
           <li
             key={c.id}
-            className="flex items-center gap-3 rounded-md border border-zinc-800 px-4 py-3"
+            className="flex items-center gap-3 rounded-xl border border-zinc-900 bg-zinc-950/40 px-4 py-3 transition hover:border-zinc-800 hover:bg-zinc-900/40"
           >
             <span
-              className="h-3 w-3 rounded-full"
+              className="h-3 w-3 flex-none rounded-full ring-2 ring-zinc-950"
               style={{ backgroundColor: c.color ?? '#6366f1' }}
             />
-            <div className="flex-1">
-              <div className="text-sm font-medium">
-                {c.name}
-                {c.code && <span className="ml-2 text-xs text-zinc-500">{c.code}</span>}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
+                <span className="truncate">{c.name}</span>
+                {c.code && (
+                  <span className="flex-none rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wider text-zinc-400">
+                    {c.code}
+                  </span>
+                )}
               </div>
-              {c.schedule_text && <div className="text-xs text-zinc-500">{c.schedule_text}</div>}
+              {c.schedule_text && (
+                <div className="truncate text-xs text-zinc-500">{c.schedule_text}</div>
+              )}
             </div>
             <button
               onClick={() => deleteCourse(c.id)}
-              className="text-xs text-zinc-500 hover:text-red-400"
+              className="flex-none text-xs text-zinc-600 transition hover:text-rose-400"
             >
               Delete
             </button>
