@@ -19,3 +19,37 @@ export const FileUploadSchema = z.object({
   mimeType: z.string().min(1),
   size: z.number().int().nonnegative(),
 });
+
+// ─────────────────────────────────────────────────────────────
+// Capture parser — the AI turns raw text into one of these.
+// ─────────────────────────────────────────────────────────────
+
+export const CourseHintSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  code: z.string().nullable().optional(),
+});
+
+export const ParsedTaskSchema = z.object({
+  type: z.literal('task'),
+  title: z.string().min(1),
+  description: z.string().nullable().optional(),
+  due_at: z.string().datetime().nullable().optional(),
+  course_id: z.string().uuid().nullable().optional(),
+});
+
+export const ParsedNoteSchema = z.object({
+  type: z.literal('note'),
+  title: z.string().nullable().optional(),
+  content: z.string().min(1),
+  course_id: z.string().uuid().nullable().optional(),
+});
+
+export const ParsedCaptureSchema = z.discriminatedUnion('type', [
+  ParsedTaskSchema,
+  ParsedNoteSchema,
+]);
+
+export const CaptureRequestSchema = z.object({
+  text: z.string().min(1).max(5000),
+});

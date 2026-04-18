@@ -1,8 +1,8 @@
 # Teddy
 
-AI startup scaffold — a monorepo with web (Next.js), mobile (Expo React Native), and shared packages wired to Supabase + OpenAI.
+AI assistant for students. Capture what happens in class as free text — Teddy classifies it as a task or a note, links it to the right course, and pulls out due dates. Monorepo: web (Next.js), mobile (Expo, scaffolded only), shared packages wired to Supabase + OpenAI.
 
-**Status:** scaffold only. Auth, file storage, and AI chat are validated end-to-end. The product itself isn't defined yet.
+**Status:** V1 (web) shipped. Courses + typed capture + task/note lists working end-to-end. Mobile, voice capture, photo/OCR, and push notifications are deferred.
 
 ---
 
@@ -63,9 +63,10 @@ cp .env.example .env
 # Edit .env — fill in Supabase URL + keys + OpenAI key.
 # Each app/* has an .env symlink pointing at this root file; don't create per-app envs.
 
-# 5. Database schema
-# Either: copy supabase/migrations/20260418000000_init.sql into Supabase SQL Editor, run it.
-# Or:     supabase link --project-ref <ref> && supabase db push
+# 5. Database schema — uses Supabase CLI (already linked via supabase/config.toml)
+brew install supabase/tap/supabase   # if you don't have it
+supabase login                        # one-time, browser flow
+pnpm db:push                          # applies any unapplied supabase/migrations/*.sql
 
 # 6. Run
 pnpm dev:web        # http://localhost:3000
@@ -80,27 +81,57 @@ Supabase dashboard → **Authentication → Providers → Email** → uncheck *C
 
 ## What's wired up
 
-**Working and validated:**
+**V1 — working:**
 
-- Email + password signup / sign in (web) — `apps/web/src/app/login/page.tsx`
-- OpenAI GPT streaming chat — `POST /api/chat` → `apps/web/src/app/api/chat/route.ts`
-- File upload to Supabase Storage with per-user RLS — `apps/web/src/app/files/page.tsx`
-- Session-aware middleware for Supabase SSR — `apps/web/src/middleware.ts`
-- Auto-create profile row on signup (SQL trigger in `supabase/migrations/…_init.sql`)
+- Email + password signup / sign in — `apps/web/src/app/login/page.tsx`
+- Courses CRUD — `apps/web/src/app/courses/page.tsx`
+- Capture box (text) → AI parser → task or note — `apps/web/src/components/CaptureBox.tsx`, `packages/ai/src/parse.ts`, `apps/web/src/app/api/capture/route.ts`
+- Home: overdue + open tasks + recent notes — `apps/web/src/app/page.tsx`
+- Task list w/ filters (open/done/all, by course), toggle complete — `apps/web/src/app/tasks/page.tsx`
+- Notes list w/ course filter — `apps/web/src/app/notes/page.tsx`
+- Three V1 tables with RLS (`courses`, `tasks`, `notes`) — `supabase/migrations/20260418100000_v1_capture.sql`
 
-**Built but not validated end-to-end:**
+**Scaffolded but dormant in V1:**
 
-- Mobile: email signin, file upload, chat screen — `apps/mobile/app/*`
-- `packages/ai/` transcribe() (Whisper) + speak() (OpenAI TTS) — no UI yet
-- Supabase Edge Function `supabase/functions/chat/` — optional OpenAI proxy for mobile
+- Mobile app (`apps/mobile/`) — builds and runs, uses initial scaffold screens only
+- `packages/ai` `transcribe()` (Whisper) and `speak()` (TTS) — for V2 voice capture
+- `POST /api/chat` streaming endpoint and file upload — original scaffold, still functional
+- Supabase Edge Function `supabase/functions/chat/`
 
-**Not done:**
+**Deferred:**
 
-- Google / Apple SSO (code paths exist, providers not enabled in Supabase dashboard)
-- Production deployment (Vercel for web, EAS for mobile)
-- Payments / billing
-- Push notifications
-- The actual product
+- Voice capture (Whisper), photo / blackboard capture (OCR), push notifications
+- Google / Apple SSO
+- Collaboration, search over history
+- Production deployment (Vercel / EAS), payments
+
+---
+
+## V1 feature surface
+
+Three tables, one capture endpoint. See `CLAUDE.md` for implementation notes.
+
+```
+courses (owner_id)  ─┐
+                     ├─  tasks (owner_id, course_id?, due_at, completed_at)
+                     └─  notes (owner_id, course_id?, content)
+```
+
+**Capture flow:**
+
+```
+CaptureBox → POST /api/capture → parseCapture(text, {courses, now})
+                                         │
+                        GPT-4o-mini (JSON mode, temp 0.2)
+                                         │
+                     { type: 'task' | 'note', ...fields }
+                                         │
+                        insert into tasks OR notes
+                                         │
+                           router.refresh() on client
+```
+
+The parser gets the user's courses as hints and is instructed not to invent `course_id` values. The API route re-validates that any returned `course_id` actually belongs to the requester before inserting.
 
 ---
 
@@ -114,6 +145,9 @@ Supabase dashboard → **Authentication → Providers → Email** → uncheck *C
 | `pnpm build` | Production build (web) |
 | `pnpm typecheck` | `tsc --noEmit` across all packages |
 | `pnpm lint` | Lint all packages |
+| `pnpm db:push` | Apply new migrations to the linked Supabase project |
+| `pnpm db:diff` | Show pending schema changes vs. remote |
+| `pnpm db:types` | Regenerate `packages/supabase/src/types.ts` from remote schema |
 
 Per-package: `pnpm --filter @teddy/web <script>` or `pnpm --filter @teddy/mobile <script>`.
 
@@ -142,7 +176,7 @@ ln -sfn ../../.env apps/mobile/.env
 
 ## Adding things
 
-**New Supabase table:** create `supabase/migrations/<timestamp>_<name>.sql`, run it in the SQL editor or via `supabase db push`, then update `packages/supabase/src/types.ts` (regenerate via `supabase gen types typescript` once CLI is linked).
+**New Supabase table:** create `supabase/migrations/<timestamp>_<name>.sql`, run `pnpm db:push`, then `pnpm db:types` to regenerate the TS types. Keep the `__InternalSupabase: { PostgrestVersion: "12" }` marker in `packages/supabase/src/types.ts` if the generator drops it.
 
 **New AI feature:** add a function in `packages/ai/src/<feature>.ts`, export from `packages/ai/src/index.ts`. Call it from an API route (web) or Supabase Edge Function (mobile). Never import `packages/ai` into client-side code — the OpenAI key lives server-side only.
 
@@ -168,6 +202,6 @@ git push
 
 ## See also
 
-- `CLAUDE.md` — project guidance for coding agents (architecture decisions, conventions, where to put things)
+- `CLAUDE.md` — project guidance for coding agents (architecture decisions, V1 surface, conventions)
 - `.env.example` — required env vars
-- `supabase/migrations/20260418000000_init.sql` — DB schema
+- `supabase/migrations/` — DB schema (init + V1 capture)
