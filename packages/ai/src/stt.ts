@@ -9,7 +9,7 @@ export async function transcribe(
   const file = await toFile(audio, opts.filename ?? 'audio.webm');
   const result = await openai.audio.transcriptions.create({
     file,
-    model: opts.model ?? 'whisper-1',
+    model: opts.model ?? 'gpt-4o-mini-transcribe',
     language: opts.language,
   });
   return result.text;
