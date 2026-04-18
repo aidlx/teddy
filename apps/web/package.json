@@ -11,8 +11,8 @@
     "clean": "rm -rf .next .turbo"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.46.1",
+    "@supabase/ssr": "^0.10.2",
+    "@supabase/supabase-js": "^2.103.3",
     "@teddy/ai": "workspace:*",
     "@teddy/shared": "workspace:*",
     "@teddy/supabase": "workspace:*",
