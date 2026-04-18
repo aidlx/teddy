@@ -14,6 +14,36 @@ export type Database = {
   }
   public: {
     Tables: {
+      calendar_subscriptions: {
+        Row: {
+          created_at: string
+          ical_url: string
+          id: string
+          last_error: string | null
+          last_synced_at: string | null
+          name: string
+          owner_id: string
+        }
+        Insert: {
+          created_at?: string
+          ical_url: string
+          id?: string
+          last_error?: string | null
+          last_synced_at?: string | null
+          name: string
+          owner_id: string
+        }
+        Update: {
+          created_at?: string
+          ical_url?: string
+          id?: string
+          last_error?: string | null
+          last_synced_at?: string | null
+          name?: string
+          owner_id?: string
+        }
+        Relationships: []
+      }
       captures: {
         Row: {
           created_at: string
@@ -67,6 +97,69 @@ export type Database = {
           schedule_text?: string | null
         }
         Relationships: []
+      }
+      events: {
+        Row: {
+          all_day: boolean
+          course_id: string | null
+          created_at: string
+          description: string | null
+          end_at: string | null
+          ical_uid: string | null
+          id: string
+          location: string | null
+          owner_id: string
+          source: string
+          start_at: string
+          subscription_id: string | null
+          title: string
+        }
+        Insert: {
+          all_day?: boolean
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          end_at?: string | null
+          ical_uid?: string | null
+          id?: string
+          location?: string | null
+          owner_id: string
+          source?: string
+          start_at: string
+          subscription_id?: string | null
+          title: string
+        }
+        Update: {
+          all_day?: boolean
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          end_at?: string | null
+          ical_uid?: string | null
+          id?: string
+          location?: string | null
+          owner_id?: string
+          source?: string
+          start_at?: string
+          subscription_id?: string | null
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "events_subscription_id_fkey"
+            columns: ["subscription_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_subscriptions"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       files: {
         Row: {

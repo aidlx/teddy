@@ -91,6 +91,7 @@ export default async function HomePage() {
         <nav className="flex items-center gap-1 text-sm">
           <NavLink href="/tasks">Tasks</NavLink>
           <NavLink href="/notes">Notes</NavLink>
+          <NavLink href="/calendar">Calendar</NavLink>
           <NavLink href="/courses">Courses</NavLink>
           <NavLink href="/captures">History</NavLink>
           <SignOutButton />
