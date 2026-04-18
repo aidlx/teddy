@@ -1,4 +1,7 @@
-export interface Database {
+export type Database = {
+  __InternalSupabase: {
+    PostgrestVersion: '12';
+  };
   public: {
     Tables: {
       profiles: {
@@ -21,6 +24,7 @@ export interface Database {
           display_name?: string | null;
           avatar_url?: string | null;
         };
+        Relationships: [];
       };
       files: {
         Row: {
@@ -47,6 +51,7 @@ export interface Database {
           size?: number;
           storage_path?: string;
         };
+        Relationships: [];
       };
     };
     Views: Record<string, never>;
@@ -54,4 +59,4 @@ export interface Database {
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
-}
+};

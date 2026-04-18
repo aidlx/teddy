@@ -39,8 +39,8 @@ export default function LoginScreen() {
     }
     const result = await WebBrowser.openAuthSessionAsync(data.url, REDIRECT);
     if (result.type === 'success' && result.url) {
-      const { params } = Linking.parse(result.url);
-      const code = typeof params.code === 'string' ? params.code : undefined;
+      const { queryParams } = Linking.parse(result.url);
+      const code = typeof queryParams?.code === 'string' ? queryParams.code : undefined;
       if (code) {
         await supabase.auth.exchangeCodeForSession(code);
         router.replace('/');
