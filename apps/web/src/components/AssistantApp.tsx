@@ -284,7 +284,18 @@ export function AssistantApp() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
       audioChunksRef.current = [];
-      const mr = new MediaRecorder(stream);
+      // Pick a mime type OpenAI accepts. Chromium defaults to
+      // audio/webm;codecs=opus; Safari emits audio/mp4 by default. The newer
+      // gpt-4o-*-transcribe models 400 if the extension doesn't match the
+      // actual container, so we pick explicitly and name the file to match.
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg;codecs=opus',
+      ];
+      const mimeType = candidates.find((t) => MediaRecorder.isTypeSupported(t));
+      const mr = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       mediaRecorderRef.current = mr;
       mr.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
@@ -292,17 +303,21 @@ export function AssistantApp() {
       mr.onstop = async () => {
         mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
         mediaStreamRef.current = null;
-        const blob = new Blob(audioChunksRef.current, {
-          type: mr.mimeType || 'audio/webm',
-        });
+        const actualMime = mr.mimeType || 'audio/webm';
+        const blob = new Blob(audioChunksRef.current, { type: actualMime });
         audioChunksRef.current = [];
         if (blob.size < 500) return; // ignore accidental taps
         setTranscribing(true);
         try {
+          const ext = actualMime.includes('mp4')
+            ? 'mp4'
+            : actualMime.includes('ogg')
+              ? 'ogg'
+              : 'webm';
           const form = new FormData();
           form.append(
             'audio',
-            new File([blob], 'recording.webm', { type: blob.type || 'audio/webm' }),
+            new File([blob], `recording.${ext}`, { type: actualMime }),
           );
           const res = await fetch('/api/transcribe', { method: 'POST', body: form });
           const data = (await res.json().catch(() => ({}))) as {
