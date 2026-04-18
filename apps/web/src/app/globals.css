@@ -19,6 +19,24 @@ html {
   color-scheme: dark;
 }
 
+@media (min-width: 1920px) {
+  html {
+    font-size: 18px;
+  }
+}
+
+@media (min-width: 2560px) {
+  html {
+    font-size: 20px;
+  }
+}
+
+@media (min-width: 3200px) {
+  html {
+    font-size: 22px;
+  }
+}
+
 html,
 body {
   background: var(--background);
