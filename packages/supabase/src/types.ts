@@ -76,6 +76,7 @@ export type Database = {
           created_at: string
           id: string
           owner_id: string
+          pending_action: Json | null
           title: string | null
           updated_at: string
         }
@@ -83,6 +84,7 @@ export type Database = {
           created_at?: string
           id?: string
           owner_id: string
+          pending_action?: Json | null
           title?: string | null
           updated_at?: string
         }
@@ -90,6 +92,7 @@ export type Database = {
           created_at?: string
           id?: string
           owner_id?: string
+          pending_action?: Json | null
           title?: string | null
           updated_at?: string
         }

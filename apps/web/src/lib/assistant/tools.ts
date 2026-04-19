@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Database } from '@teddy/supabase';
 import type { AgentTool } from '@teddy/ai';
 import {
+  buildDateAnchors,
   resolveTimeRef,
   decorateEventTimes,
   decorateTaskTimes,
@@ -10,6 +11,7 @@ import {
   type RelativeUnit,
   type TimeRef,
 } from './time';
+import type { PendingActionOption } from './pending';
 
 type DB = SupabaseClient<Database>;
 type TaskUpdate = Database['public']['Tables']['tasks']['Update'];
@@ -32,6 +34,9 @@ type ResolvedDue = Pick<
 > & {
   anchorEvent: EventAnchorRow | null;
 };
+
+type ToolArgs = Record<string, unknown>;
+type ClarificationResult = Record<string, unknown>;
 
 type DueSpec = {
   kind: 'none' | 'absolute_utc' | 'date' | 'datetime' | 'relative' | 'event';
@@ -231,6 +236,16 @@ function courseDisplayLabel(course: CourseRow): string {
   return course.code ? `${course.code} ${course.name}` : course.name;
 }
 
+function courseBaseLabel(course: CourseRow): string {
+  let label = course.name.replace(COURSE_TYPE_RE, ' ');
+  if (course.code) {
+    const codeRe = new RegExp(`^\\s*${course.code.replace(/[.\\]/g, (m) => `\\${m}`)}\\s*`);
+    label = label.replace(codeRe, '');
+  }
+  label = label.replace(/,\s*Standardgruppe\s*$/i, ' ');
+  return label.replace(/\s+/g, ' ').trim() || course.name;
+}
+
 function courseRefScore(course: CourseRow, raw: string): number {
   const rawNorm = normalizeCourseText(raw);
   const rawCompact = compactCourseText(raw);
@@ -340,6 +355,28 @@ function buildCourseNotFoundError(ref: string) {
   };
 }
 
+function buildClarificationRequired(
+  toolName: string,
+  toolArgs: ToolArgs,
+  question: string,
+  options: PendingActionOption[],
+  details: Record<string, unknown>,
+): ClarificationResult {
+  return {
+    ...details,
+    __clarification_required: {
+      question,
+      options: options.map((option) => ({ label: option.label })),
+      pending_action: {
+        tool_name: toolName,
+        tool_args: toolArgs,
+        question,
+        options,
+      },
+    },
+  };
+}
+
 function buildCourseEventMismatchError(
   event: EventAnchorRow,
   requestedCourseRef: string | null | undefined,
@@ -415,9 +452,133 @@ export function buildTools(
     return (data ?? []) as CourseRow[];
   }
 
-  async function guardCourseAmbiguity(
+  async function buildCourseChoiceClarification(
+    toolName: string,
+    toolArgs: ToolArgs,
+    matches: CourseRow[],
+    reason: string,
+  ): Promise<ClarificationResult> {
+    const base = courseBaseLabel(matches[0]!);
+    const options: PendingActionOption[] = matches.map((course) => ({
+      label: courseDisplayLabel(course),
+      patch: { course_ref: courseDisplayLabel(course) },
+    }));
+    return buildClarificationRequired(
+      toolName,
+      toolArgs,
+      `Which ${base} course should I use?`,
+      options,
+      {
+        error: 'ambiguous_course',
+        reason,
+        matches: matches.map((course) => ({
+          id: course.id,
+          name: course.name,
+          code: course.code,
+        })),
+      },
+    );
+  }
+
+  async function buildEventChoiceClarification(
+    toolName: string,
+    toolArgs: ToolArgs,
+    event: EventAnchorRow,
+    target: CourseRow,
+    siblings: CourseRow[],
+    errorCode: 'ambiguous_course' | 'course_event_mismatch' = 'ambiguous_course',
+    reasonOverride?: string,
+  ): Promise<ClarificationResult> {
+    const courses = [target, ...siblings];
+    const courseIds = courses.map((course) => course.id);
+    const week = buildDateAnchors(userTz, new Date(event.start_at)).thisWeek;
+    const { data, error } = await supabase
+      .from('events')
+      .select('id, title, start_at, course_id')
+      .eq('owner_id', userId)
+      .in('course_id', courseIds)
+      .gte('start_at', week.from)
+      .lt('start_at', week.to)
+      .order('start_at');
+    if (error) throw new Error(error.message);
+
+    const courseById = new Map(courses.map((course) => [course.id, course]));
+    const options = (data ?? []).reduce<PendingActionOption[]>((acc, candidate) => {
+      const course = candidate.course_id ? courseById.get(candidate.course_id) : null;
+      if (!course) return acc;
+      const dateLabel = new Date(candidate.start_at).toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        timeZone: userTz,
+      });
+      const timeLabel = toLocalWallClock(candidate.start_at, userTz).slice(11, 16);
+      acc.push({
+        label: `${courseDisplayLabel(course)} — ${dateLabel}, ${timeLabel}`,
+        patch: {
+          course_ref: courseDisplayLabel(course),
+          due: { event_id: candidate.id },
+        },
+      });
+      return acc;
+    }, []);
+
+    if (options.length === 0) {
+      const fallback = courses.map((course) => ({
+        label: courseDisplayLabel(course),
+        patch: { course_ref: courseDisplayLabel(course) },
+      })) satisfies PendingActionOption[];
+      return buildClarificationRequired(
+        toolName,
+        toolArgs,
+        `Which ${courseBaseLabel(target)} course should I use for this reminder?`,
+        fallback,
+        {
+          error: errorCode,
+          reason:
+            reasonOverride
+            ?? `"${target.name}" matches multiple scheduled classes this week, and the user's last message did not identify which one they meant.`,
+          target: { id: target.id, name: target.name, code: target.code },
+          siblings: siblings.map((course) => ({
+            id: course.id,
+            name: course.name,
+            code: course.code,
+          })),
+        },
+      );
+    }
+
+    return buildClarificationRequired(
+      toolName,
+      toolArgs,
+      `Which ${courseBaseLabel(target)} class should I use for this reminder?`,
+      options,
+      {
+        error: errorCode,
+        reason:
+          reasonOverride
+          ?? `"${target.name}" matches multiple scheduled classes this week, and the user's last message did not identify which one they meant.`,
+        target: {
+          id: target.id,
+          name: target.name,
+          code: target.code,
+          event_id: event.id,
+          event_title: event.title,
+        },
+        siblings: siblings.map((course) => ({
+          id: course.id,
+          name: course.name,
+          code: course.code,
+        })),
+      },
+    );
+  }
+
+  async function guardCourseAmbiguityForAction(
+    toolName: string,
+    toolArgs: ToolArgs,
     targetId: string,
-  ): Promise<{ ok: true } | { ok: false; error: Record<string, unknown> }> {
+  ): Promise<{ ok: true } | { ok: false; error: ClarificationResult }> {
     const courses = await listOwnedCourses();
     const target = courses.find((c) => c.id === targetId);
     if (!target) return { ok: true };
@@ -426,20 +587,20 @@ export function buildTools(
     if (userDisambiguatedTarget(lastUserMessage, target, siblings)) return { ok: true };
     return {
       ok: false,
-      error: {
-        error: 'ambiguous_course',
-        reason: `"${target.name}" shares its base name with ${siblings.length} other course(s) the user owns, and the user's last message did not name a distinguishing marker (code or type like VO/KU/VU/UE).`,
-        target: { id: target.id, name: target.name, code: target.code },
-        siblings: siblings.map((s) => ({ id: s.id, name: s.name, code: s.code })),
-        instruction:
-          'Do not retry with this course. Ask the user to pick a specific course, including code + name + type in each option.',
-      },
+      error: await buildCourseChoiceClarification(
+        toolName,
+        toolArgs,
+        [target, ...siblings].sort((a, b) => courseDisplayLabel(a).localeCompare(courseDisplayLabel(b))),
+        `"${target.name}" shares its base name with ${siblings.length} other course(s) the user owns, and the user's last message did not name a distinguishing marker (code or type like VO/KU/VU/UE).`,
+      ),
     };
   }
 
-  async function guardEventAmbiguity(
+  async function guardEventAmbiguityForAction(
+    toolName: string,
+    toolArgs: ToolArgs,
     event: EventAnchorRow,
-  ): Promise<{ ok: true } | { ok: false; error: Record<string, unknown> }> {
+  ): Promise<{ ok: true } | { ok: false; error: ClarificationResult }> {
     if (!event.course_id) return { ok: true };
     const courses = await listOwnedCourses();
     const target = courses.find((course) => course.id === event.course_id);
@@ -450,15 +611,31 @@ export function buildTools(
     if (userDisambiguatedEventSchedule(lastUserMessage, event, userTz)) return { ok: true };
     return {
       ok: false,
-      error: {
-        error: 'ambiguous_course',
-        reason: `"${target.name}" shares its base name with ${siblings.length} other course(s) the user owns, and the user's last message did not identify which scheduled class they meant.`,
-        target: { id: target.id, name: target.name, code: target.code, event_id: event.id, event_title: event.title },
-        siblings: siblings.map((s) => ({ id: s.id, name: s.name, code: s.code })),
-        instruction:
-          'Do not retry with this event. Call request_clarification and let the user pick the exact class.',
-      },
+      error: await buildEventChoiceClarification(toolName, toolArgs, event, target, siblings),
     };
+  }
+
+  async function buildCourseEventMismatchClarification(
+    toolName: string,
+    toolArgs: ToolArgs,
+    event: EventAnchorRow,
+    requestedCourseRef: string | null | undefined,
+  ): Promise<ClarificationResult | null> {
+    if (!event.course_id) return null;
+    const courses = await listOwnedCourses();
+    const target = courses.find((course) => course.id === event.course_id);
+    if (!target) return null;
+    const siblings = findSiblings(courses, target);
+    if (siblings.length === 0) return null;
+    return buildEventChoiceClarification(
+      toolName,
+      toolArgs,
+      event,
+      target,
+      siblings,
+      'course_event_mismatch',
+      `The selected event_id belongs to a different course than "${requestedCourseRef ?? 'the requested course'}". Pick the exact scheduled class to use.`,
+    );
   }
 
   async function resolveCourseRef(ref: string | undefined | null): Promise<CourseResolution> {
@@ -503,17 +680,33 @@ export function buildTools(
     return { id: resolved.course.id };
   }
 
-  async function resolveCourseWrite(
+  async function resolveCourseWriteForAction(
+    toolName: string,
+    toolArgs: ToolArgs,
     ref: string | undefined | null,
-  ): Promise<{ id: string | null } | { error: Record<string, unknown> }> {
+  ): Promise<
+    | { kind: 'resolved'; id: string | null }
+    | { kind: 'error'; error: Record<string, unknown> }
+    | { kind: 'clarification'; result: ClarificationResult }
+  > {
     const raw = ref?.trim();
-    if (!raw) return { id: null };
+    if (!raw) return { kind: 'resolved', id: null };
     const resolved = await resolveCourseRef(ref);
-    if (resolved.kind === 'none') return { error: buildCourseNotFoundError(raw) };
-    if (resolved.kind === 'ambiguous') return { error: buildAmbiguousCourseError(resolved.matches, ref ?? undefined) };
-    const guard = await guardCourseAmbiguity(resolved.course.id);
-    if (!guard.ok) return { error: guard.error };
-    return { id: resolved.course.id };
+    if (resolved.kind === 'none') return { kind: 'error', error: buildCourseNotFoundError(raw) };
+    if (resolved.kind === 'ambiguous') {
+      return {
+        kind: 'clarification',
+        result: await buildCourseChoiceClarification(
+          toolName,
+          toolArgs,
+          resolved.matches,
+          `The course reference "${raw}" matches multiple courses the user owns.`,
+        ),
+      };
+    }
+    const guard = await guardCourseAmbiguityForAction(toolName, toolArgs, resolved.course.id);
+    if (!guard.ok) return { kind: 'clarification', result: guard.error };
+    return { kind: 'resolved', id: resolved.course.id };
   }
 
   async function getEventAnchor(eventId: string): Promise<EventAnchorRow | null> {
@@ -831,15 +1024,24 @@ export function buildTools(
         const title = asString(args.title);
         if (!title) throw new Error('title is required');
         const requestedCourseRef = asString(args.course_ref);
-        const course = await resolveCourseWrite(requestedCourseRef);
-        if ('error' in course) return course.error;
+        const course = await resolveCourseWriteForAction('create_task', args as ToolArgs, requestedCourseRef);
+        if (course.kind === 'error') return course.error;
+        if (course.kind === 'clarification') return course.result;
         const due = await resolveDue(args.due);
         let courseId = course.id;
         if (due.anchorEvent?.course_id) {
           if (courseId && courseId !== due.anchorEvent.course_id) {
-            return buildCourseEventMismatchError(due.anchorEvent, requestedCourseRef);
+            return (
+              (await buildCourseEventMismatchClarification(
+                'create_task',
+                args as ToolArgs,
+                due.anchorEvent,
+                requestedCourseRef,
+              ))
+              ?? buildCourseEventMismatchError(due.anchorEvent, requestedCourseRef)
+            );
           }
-          const guard = await guardEventAmbiguity(due.anchorEvent);
+          const guard = await guardEventAmbiguityForAction('create_task', args as ToolArgs, due.anchorEvent);
           if (!guard.ok) return guard.error;
           courseId = due.anchorEvent.course_id;
         }
@@ -926,21 +1128,47 @@ export function buildTools(
           eventCourseId = due.anchorEvent?.course_id ?? null;
           if (due.anchorEvent) {
             if (requestedCourseRef) {
-              const requestedCourse = await resolveCourseWrite(requestedCourseRef);
-              if ('error' in requestedCourse) return requestedCourse.error;
+              const requestedCourse = await resolveCourseWriteForAction(
+                'update_task',
+                args as ToolArgs,
+                requestedCourseRef,
+              );
+              if (requestedCourse.kind === 'error') return requestedCourse.error;
+              if (requestedCourse.kind === 'clarification') return requestedCourse.result;
               if (requestedCourse.id && requestedCourse.id !== due.anchorEvent.course_id) {
-                return buildCourseEventMismatchError(due.anchorEvent, requestedCourseRef);
+                return (
+                  (await buildCourseEventMismatchClarification(
+                    'update_task',
+                    args as ToolArgs,
+                    due.anchorEvent,
+                    requestedCourseRef,
+                  ))
+                  ?? buildCourseEventMismatchError(due.anchorEvent, requestedCourseRef)
+                );
               }
             }
-            const guard = await guardEventAmbiguity(due.anchorEvent);
+            const guard = await guardEventAmbiguityForAction(
+              'update_task',
+              args as ToolArgs,
+              due.anchorEvent,
+            );
             if (!guard.ok) return guard.error;
           }
         }
         if (asBool(args.set_course)) {
-          const course = await resolveCourseWrite(requestedCourseRef);
-          if ('error' in course) return course.error;
+          const course = await resolveCourseWriteForAction('update_task', args as ToolArgs, requestedCourseRef);
+          if (course.kind === 'error') return course.error;
+          if (course.kind === 'clarification') return course.result;
           if (eventAnchor && course.id && course.id !== eventCourseId) {
-            return buildCourseEventMismatchError(eventAnchor, requestedCourseRef);
+            return (
+              (await buildCourseEventMismatchClarification(
+                'update_task',
+                args as ToolArgs,
+                eventAnchor,
+                requestedCourseRef,
+              ))
+              ?? buildCourseEventMismatchError(eventAnchor, requestedCourseRef)
+            );
           }
           patch.course_id = course.id;
         } else if (eventCourseId) {
@@ -1009,8 +1237,9 @@ export function buildTools(
       handler: async (args) => {
         const content = asString(args.content);
         if (!content) throw new Error('content is required');
-        const course = await resolveCourseWrite(asString(args.course_ref));
-        if ('error' in course) return course.error;
+        const course = await resolveCourseWriteForAction('create_note', args as ToolArgs, asString(args.course_ref));
+        if (course.kind === 'error') return course.error;
+        if (course.kind === 'clarification') return course.result;
         const { data, error } = await supabase
           .from('notes')
           .insert({
@@ -1059,8 +1288,9 @@ export function buildTools(
           patch.content = content;
         }
         if (asBool(args.set_course)) {
-          const course = await resolveCourseWrite(asString(args.course_ref));
-          if ('error' in course) return course.error;
+          const course = await resolveCourseWriteForAction('update_note', args as ToolArgs, asString(args.course_ref));
+          if (course.kind === 'error') return course.error;
+          if (course.kind === 'clarification') return course.result;
           patch.course_id = course.id;
         }
         const { data, error } = await supabase

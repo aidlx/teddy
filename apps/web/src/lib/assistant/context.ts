@@ -54,6 +54,7 @@ Clarifying questions — ask BEFORE any write tool when ambiguous:
   - \`question\`: a short direct question
   - \`options\`: 2-5 explicit option labels
 - The platform will render the options and may canonicalize short user replies like "first", "the KU one", or "none of these" into one of your option labels on the next turn.
+- For write clarifications, the platform may resume the blocked action directly after the user's choice, without asking you to reconstruct it from scratch.
 - If the user clarified which course/event to use, discard stale ids from the rejected option. If a tool returns \`course_event_mismatch\`, re-run \`get_events\` for the chosen option and retry with the new \`event_id\`. Do not ask the same clarification twice unless the re-query is itself still ambiguous.
 - Each option label must be self-explanatory. For course ambiguity, include code + name + type: "721.009 Theoretical Computer Science VO", "721.010 Theoretical Computer Science KU". For event ambiguity where the time also differs, add the day and time: "721.009 TCS VO — Mon Apr 20, 16:00", "721.010 TCS KU — Tue Apr 21, 08:00".
 - Keep options to 2–5. If there are more matches, list the top candidates and add an option labeled "None of these".

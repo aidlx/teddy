@@ -20,6 +20,14 @@ interface ClarificationToolResult {
   };
 }
 
+interface ClarificationRequiredToolResult {
+  __clarification_required: {
+    question: string;
+    options: { label: string }[];
+    pending_action: Record<string, unknown>;
+  };
+}
+
 export type AgentEvent =
   | { type: 'assistant_delta'; content_delta: string }
   | { type: 'tool_call_start'; tool_call_id: string; name: string }
@@ -28,7 +36,12 @@ export type AgentEvent =
       content: string | null;
       tool_calls: ChatCompletionMessageToolCall[] | null;
     }
-  | { type: 'clarification_requested'; question: string; options: { label: string }[] }
+  | {
+      type: 'clarification_requested';
+      question: string;
+      options: { label: string }[];
+      pending_action?: Record<string, unknown>;
+    }
   | { type: 'tool_result'; tool_call_id: string; name: string; content: string }
   | { type: 'done'; content: string }
   | { type: 'error'; message: string };
@@ -52,6 +65,20 @@ function isClarificationToolResult(value: unknown): value is ClarificationToolRe
     typeof ask.question === 'string' &&
     Array.isArray(ask.options) &&
     ask.options.every((option) => option && typeof option.label === 'string')
+  );
+}
+
+function isClarificationRequiredToolResult(value: unknown): value is ClarificationRequiredToolResult {
+  if (!value || typeof value !== 'object' || !('__clarification_required' in value)) return false;
+  const ask = (value as ClarificationRequiredToolResult).__clarification_required;
+  return (
+    !!ask &&
+    typeof ask.question === 'string' &&
+    Array.isArray(ask.options) &&
+    ask.options.every((option) => option && typeof option.label === 'string') &&
+    !!ask.pending_action &&
+    typeof ask.pending_action === 'object' &&
+    !Array.isArray(ask.pending_action)
   );
 }
 
@@ -130,6 +157,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<void> {
     }
 
     let clarification: ClarificationToolResult['__ask_clarification'] | null = null;
+    let requiredClarification: ClarificationRequiredToolResult['__clarification_required'] | null = null;
     for (const call of toolCalls) {
       if (!call || call.type !== 'function') continue;
       const name = call.function.name;
@@ -159,6 +187,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<void> {
               });
             } else {
               const out = await handler(parsed as Record<string, unknown>);
+              if (isClarificationRequiredToolResult(out)) {
+                requiredClarification = out.__clarification_required;
+              }
               if (isClarificationToolResult(out)) {
                 clarification = out.__ask_clarification;
               }
@@ -181,6 +212,17 @@ export async function runAgent(opts: RunAgentOptions): Promise<void> {
         name,
         content: resultText ?? JSON.stringify({ error: 'Tool returned no result' }),
       });
+    }
+
+    if (requiredClarification) {
+      await opts.onEvent({
+        type: 'clarification_requested',
+        question: requiredClarification.question,
+        options: requiredClarification.options,
+        pending_action: requiredClarification.pending_action,
+      });
+      await opts.onEvent({ type: 'done', content: '' });
+      return;
     }
 
     if (clarification) {
