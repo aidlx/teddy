@@ -157,6 +157,12 @@ function renderDirectAssistantMessage(
     const completed = typeof obj.completed_at === 'string' && obj.completed_at.length > 0;
     return completed ? `Marked "${title}" complete.` : `Marked "${title}" open again.`;
   }
+  if (toolName === 'delete_task') {
+    const title = typeof obj.title === 'string' ? obj.title : 'the task';
+    if (obj.cancelled === true) return `OK, leaving "${title}" as-is.`;
+    if (obj.deleted === true) return `Deleted "${title}".`;
+    return 'Done.';
+  }
   if (toolName === 'create_note') {
     const title = typeof obj.title === 'string' && obj.title.length > 0 ? obj.title : 'Untitled';
     return `Created the note "${title}".`;

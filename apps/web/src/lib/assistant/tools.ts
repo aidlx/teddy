@@ -1288,7 +1288,7 @@ export function buildTools(
     {
       definition: strictFunction(
         'complete_task',
-        'Mark a task complete or uncomplete it.',
+        'Mark a task complete or uncomplete it. Never use this to delete a task — use delete_task instead.',
         {
           type: 'object',
           additionalProperties: false,
@@ -1312,6 +1312,71 @@ export function buildTools(
           .single();
         if (error) throw new Error(error.message);
         return decorateTask(data);
+      },
+    },
+
+    {
+      definition: strictFunction(
+        'delete_task',
+        'Permanently delete a task. Always call this when the user says "delete" or "remove" a task — do NOT use complete_task. The platform prompts the user with clickable Delete/Cancel options; on confirmation it re-invokes this tool with confirmed=true and the deletion happens. Do not ask for confirmation in prose yourself.',
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            confirmed: {
+              type: ['boolean', 'null'],
+              description: 'Leave as null on the first call. The platform sets this to true after the user clicks the Delete button.',
+            },
+          },
+          required: ['id', 'confirmed'],
+        },
+      ),
+      handler: async (args) => {
+        const id = asString(args.id);
+        if (!id) throw new Error('id is required');
+        const confirmed = asBool(args.confirmed);
+        const cancelled = (args as Record<string, unknown>).__cancel === true;
+
+        const { data: task, error: fetchError } = await supabase
+          .from('tasks')
+          .select('id, title')
+          .eq('owner_id', userId)
+          .eq('id', id)
+          .maybeSingle();
+        if (fetchError) throw new Error(fetchError.message);
+        if (!task) {
+          return {
+            error: 'task_not_found',
+            reason: `No task with id ${id}.`,
+          };
+        }
+
+        if (cancelled) {
+          return { ok: true, cancelled: true, id: task.id, title: task.title };
+        }
+
+        if (confirmed !== true) {
+          const deleteLabel = `Delete "${task.title}"`;
+          return buildClarificationRequired(
+            'delete_task',
+            { id, confirmed: null },
+            `Delete "${task.title}"? This cannot be undone.`,
+            [
+              { label: deleteLabel, patch: { confirmed: true } },
+              { label: 'Cancel', patch: { confirmed: false, __cancel: true } },
+            ],
+            { id: task.id, title: task.title },
+          );
+        }
+
+        const { error: deleteError } = await supabase
+          .from('tasks')
+          .delete()
+          .eq('owner_id', userId)
+          .eq('id', id);
+        if (deleteError) throw new Error(deleteError.message);
+        return { ok: true, deleted: true, id: task.id, title: task.title };
       },
     },
 
