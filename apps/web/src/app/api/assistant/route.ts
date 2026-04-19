@@ -120,7 +120,7 @@ export async function POST(request: NextRequest) {
   const userTz = await resolveUserTz(supabase, user.id, parsed.data.tz);
   const context = await buildContext(supabase, user.id, userTz);
   const systemPrompt = `${SYSTEM_PROMPT}\n\n${context}`;
-  const tools = buildTools(supabase, user.id, userTz);
+  const tools = buildTools(supabase, user.id, userTz, parsed.data.message);
 
   // If the user attached images, wrap the message + images in a multipart
   // user content array (gpt-4o-mini supports vision). Otherwise plain string.
@@ -162,7 +162,15 @@ export async function POST(request: NextRequest) {
           tools,
           maxIterations: 8,
           onEvent: async (ev: AgentEvent) => {
-            if (ev.type === 'assistant_message') {
+            if (ev.type === 'assistant_delta') {
+              send({ type: 'assistant_delta', content_delta: ev.content_delta });
+            } else if (ev.type === 'tool_call_start') {
+              send({
+                type: 'tool_call_start',
+                tool_call_id: ev.tool_call_id,
+                name: ev.name,
+              });
+            } else if (ev.type === 'assistant_message') {
               const { data: row } = await supabase
                 .from('messages')
                 .insert({

@@ -92,6 +92,57 @@ function tzOffsetMs(epochMs: number, tz: string): number {
   return wallAsUtc - epochMs;
 }
 
+// INVARIANT: `toLocalWallClock` and `resolveTime` are inverses and MUST be
+// used as a pair at every boundary where timestamps cross between the DB and
+// the model.
+//   - Reading from DB to show the model  → decorate through toLocalWallClock.
+//   - Writing a model-supplied time to DB → route through resolveTime.
+// Break the pair and the model will misread UTC as wall-clock (bugs are hard
+// to spot — reminders fire hours off by exactly the user's tz offset).
+// To enforce this, always decorate task/event rows with the helpers below
+// instead of hand-rolling a toLocaleString formatter.
+
+// Inverse of resolveTime's naive-local parse: given a UTC ISO string, return
+// the wall-clock in `tz` formatted as "YYYY-MM-DDTHH:mm" (no Z, no offset) —
+// the same shape the model should feed back into due_at.
+export function toLocalWallClock(utcIso: string, tz: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(new Date(utcIso));
+  const pick = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return `${pick('year')}-${pick('month')}-${pick('day')}T${pick('hour')}:${pick('minute')}`;
+}
+
+// Record decorators. These are the ONLY sanctioned way to surface a DB time
+// to the model. Every tool handler / context builder that returns a row with
+// a timestamp field MUST pass it through the matching decorator.
+
+export function decorateEventTimes<
+  T extends { start_at: string; end_at?: string | null },
+>(row: T, tz: string): T & { start_local: string; end_local: string | null } {
+  return {
+    ...row,
+    start_local: toLocalWallClock(row.start_at, tz),
+    end_local: row.end_at ? toLocalWallClock(row.end_at, tz) : null,
+  };
+}
+
+export function decorateTaskTimes<T extends { due_at: string | null }>(
+  row: T,
+  tz: string,
+): T & { due_local: string | null } {
+  return {
+    ...row,
+    due_local: row.due_at ? toLocalWallClock(row.due_at, tz) : null,
+  };
+}
+
 export function isValidTz(tz: string | undefined | null): tz is string {
   if (!tz || typeof tz !== 'string') return false;
   try {

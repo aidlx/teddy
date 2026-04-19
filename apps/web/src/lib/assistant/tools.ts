@@ -1,11 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@teddy/supabase';
 import type { AgentTool } from '@teddy/ai';
-import { resolveTime } from './time';
+import { resolveTime, decorateEventTimes, decorateTaskTimes } from './time';
 
 type DB = SupabaseClient<Database>;
 type TaskUpdate = Database['public']['Tables']['tasks']['Update'];
 type NoteUpdate = Database['public']['Tables']['notes']['Update'];
+type CourseRow = Pick<Database['public']['Tables']['courses']['Row'], 'id' | 'name' | 'code'>;
 
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
@@ -19,10 +20,102 @@ function asBool(v: unknown): boolean | undefined {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const TIME_HINT =
-  'Accepts: "2026-04-22T14:00" (local wall-clock), "2026-04-22" (local midnight), "+2h"/"-30m"/"+3d"/"+1w" (relative to now), or absolute ISO ("…Z" / "…+02:00"). Server resolves in the user\'s tz — do not do timezone math.';
+// Austrian university course types. These suffixes distinguish otherwise
+// identically-named courses (same code prefix, same subject).
+const COURSE_TYPE_RE = /\b(VO|KU|VU|UE|SE|PR|PS|LU|IL|PV|SL|KS)\b/gi;
 
-export function buildTools(supabase: DB, userId: string, userTz: string): AgentTool[] {
+const TIME_HINT =
+  'Accepts: "2026-04-22T14:00" (local wall-clock, PREFERRED — match what the user said), "2026-04-22" (local midnight), "+2h"/"-30m"/"+3d"/"+1w" (relative to now), or absolute ISO ("…Z" / "…+02:00"). Server resolves in the user\'s tz — do not do timezone math. For reminders tied to an event, copy the event\'s `start_local` field verbatim (NOT `start_at`, which is UTC).';
+
+function courseTypes(name: string): string[] {
+  const matches = name.match(COURSE_TYPE_RE);
+  return matches ? matches.map((m) => m.toUpperCase()) : [];
+}
+
+function normalizeBase(c: CourseRow): string {
+  let n = c.name;
+  if (c.code) {
+    const codeRe = new RegExp(`^\\s*${c.code.replace(/[.\\]/g, (m) => `\\${m}`)}\\s*`);
+    n = n.replace(codeRe, '');
+  }
+  n = n.replace(COURSE_TYPE_RE, ' ');
+  n = n.replace(/,\s*Standardgruppe\s*$/i, ' ');
+  n = n.replace(/\s+/g, ' ').trim().toLowerCase();
+  return n;
+}
+
+// Given the target course the model wants to act on, return every other course
+// the user owns whose "base name" (stripped of code + type suffix like VO/KU)
+// matches. Empty array = unambiguous; non-empty = the model must have been
+// explicit to proceed.
+function findSiblings(all: CourseRow[], target: CourseRow): CourseRow[] {
+  const base = normalizeBase(target);
+  return all.filter((c) => c.id !== target.id && normalizeBase(c) === base);
+}
+
+// Did the user's last message mention a token that picks `target` uniquely
+// out of its siblings? We look for the course code (e.g. "721.010") or a
+// type marker ("KU", "VO") that target has and the siblings do not.
+function userDisambiguatedTarget(
+  lastUserMessage: string,
+  target: CourseRow,
+  siblings: CourseRow[],
+): boolean {
+  const msg = lastUserMessage.toLowerCase();
+  if (!msg) return false;
+  if (target.code && msg.includes(target.code.toLowerCase())) return true;
+  // Some users type just the numeric code: "716" for "716.009".
+  if (target.code) {
+    const numeric = target.code.replace(/\D+/g, '');
+    if (numeric.length >= 3 && msg.includes(numeric)) return true;
+  }
+  const targetTypes = new Set(courseTypes(target.name));
+  const siblingTypes = new Set(siblings.flatMap((s) => courseTypes(s.name)));
+  for (const t of targetTypes) {
+    if (siblingTypes.has(t)) continue;
+    // Word-boundary match to avoid "vu" hitting "vue" etc.
+    const re = new RegExp(`\\b${t.toLowerCase()}\\b`);
+    if (re.test(msg)) return true;
+  }
+  return false;
+}
+
+export function buildTools(
+  supabase: DB,
+  userId: string,
+  userTz: string,
+  lastUserMessage: string,
+): AgentTool[] {
+  const decorateEvent = <T extends { start_at: string; end_at?: string | null }>(e: T) =>
+    decorateEventTimes(e, userTz);
+  const decorateTask = <T extends { due_at: string | null }>(t: T) =>
+    decorateTaskTimes(t, userTz);
+
+  async function guardCourseAmbiguity(
+    targetId: string,
+  ): Promise<{ ok: true } | { ok: false; error: Record<string, unknown> }> {
+    const { data: all } = await supabase
+      .from('courses')
+      .select('id, name, code')
+      .eq('owner_id', userId);
+    const courses = (all ?? []) as CourseRow[];
+    const target = courses.find((c) => c.id === targetId);
+    if (!target) return { ok: true };
+    const siblings = findSiblings(courses, target);
+    if (siblings.length === 0) return { ok: true };
+    if (userDisambiguatedTarget(lastUserMessage, target, siblings)) return { ok: true };
+    return {
+      ok: false,
+      error: {
+        error: 'ambiguous_course',
+        reason: `"${target.name}" shares its base name with ${siblings.length} other course(s) the user owns, and the user's last message did not name a distinguishing marker (code or type like VO/KU/VU/UE).`,
+        target: { id: target.id, name: target.name, code: target.code },
+        siblings: siblings.map((s) => ({ id: s.id, name: s.name, code: s.code })),
+        instruction:
+          'Do NOT retry with this course_id. First ask the user to pick: emit ONLY a ```ask``` fence with all candidates as options (include code + name + type, e.g. "721.009 Theoretical Computer Science VO"). After the user picks, call the write tool again using the course_id they chose.',
+      },
+    };
+  }
   const resolve = (s: string | undefined) => (s ? resolveTime(s, userTz) : undefined);
   // Resolve a user-supplied course reference to a uuid. Accepts either a
   // proper uuid (verified to belong to this user) or a course code / name
@@ -87,7 +180,7 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
         if (courseId) q = q.eq('course_id', courseId);
         const { data, error } = await q;
         if (error) throw new Error(error.message);
-        return data ?? [];
+        return (data ?? []).map(decorateTask);
       },
     },
 
@@ -181,7 +274,7 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
         if (courseId) q = q.eq('course_id', courseId);
         const { data, error } = await q;
         if (error) throw new Error(error.message);
-        return data ?? [];
+        return (data ?? []).map(decorateEvent);
       },
     },
 
@@ -216,8 +309,8 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
             .limit(1),
         ]);
         return {
-          current: current?.[0] ?? null,
-          next: next?.[0] ?? null,
+          current: current?.[0] ? decorateEvent(current[0]) : null,
+          next: next?.[0] ? decorateEvent(next[0]) : null,
         };
       },
     },
@@ -245,6 +338,10 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
         const title = asString(args.title);
         if (!title) throw new Error('title is required');
         const courseId = await assertCourse(asString(args.course_id));
+        if (courseId) {
+          const guard = await guardCourseAmbiguity(courseId);
+          if (!guard.ok) return guard.error;
+        }
         const { data, error } = await supabase
           .from('tasks')
           .insert({
@@ -257,7 +354,7 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
           .select()
           .single();
         if (error) throw new Error(error.message);
-        return data;
+        return decorateTask(data);
       },
     },
 
@@ -291,7 +388,14 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
         }
         if ('description' in args) patch.description = asString(args.description) ?? null;
         if ('due_at' in args) patch.due_at = resolve(asString(args.due_at)) ?? null;
-        if ('course_id' in args) patch.course_id = await assertCourse(asString(args.course_id));
+        if ('course_id' in args) {
+          const newCourseId = await assertCourse(asString(args.course_id));
+          if (newCourseId) {
+            const guard = await guardCourseAmbiguity(newCourseId);
+            if (!guard.ok) return guard.error;
+          }
+          patch.course_id = newCourseId;
+        }
         const { data, error } = await supabase
           .from('tasks')
           .update(patch)
@@ -300,7 +404,7 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
           .select()
           .single();
         if (error) throw new Error(error.message);
-        return data;
+        return decorateTask(data);
       },
     },
 
@@ -332,7 +436,7 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
           .select()
           .single();
         if (error) throw new Error(error.message);
-        return data;
+        return decorateTask(data);
       },
     },
 
@@ -358,6 +462,10 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
         const content = asString(args.content);
         if (!content) throw new Error('content is required');
         const courseId = await assertCourse(asString(args.course_id));
+        if (courseId) {
+          const guard = await guardCourseAmbiguity(courseId);
+          if (!guard.ok) return guard.error;
+        }
         const { data, error } = await supabase
           .from('notes')
           .insert({
@@ -400,7 +508,14 @@ export function buildTools(supabase: DB, userId: string, userTz: string): AgentT
           const v = asString(args.content);
           if (v) patch.content = v;
         }
-        if ('course_id' in args) patch.course_id = await assertCourse(asString(args.course_id));
+        if ('course_id' in args) {
+          const newCourseId = await assertCourse(asString(args.course_id));
+          if (newCourseId) {
+            const guard = await guardCourseAmbiguity(newCourseId);
+            if (!guard.ok) return guard.error;
+          }
+          patch.course_id = newCourseId;
+        }
         const { data, error } = await supabase
           .from('notes')
           .update(patch)

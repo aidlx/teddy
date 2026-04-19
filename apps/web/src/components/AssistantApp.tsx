@@ -9,6 +9,8 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ToolCall {
   id: string;
@@ -38,6 +40,66 @@ interface ImageAttachment {
   name: string;
 }
 
+type Status =
+  | { kind: 'thinking' }
+  | { kind: 'calling'; name: string }
+  | null;
+
+interface AskPayload {
+  question: string;
+  options: { label: string }[];
+}
+
+interface Turn {
+  user: UIMessage;
+  intermediate: UIMessage[];
+  final: UIMessage | null;
+}
+
+const ASK_FENCE = /```ask\s*\n?([\s\S]+?)\n?```/;
+
+function parseAsk(content: string | null | undefined): AskPayload | null {
+  if (!content) return null;
+  const match = content.match(ASK_FENCE);
+  if (!match || !match[1]) return null;
+  try {
+    const parsed = JSON.parse(match[1].trim()) as {
+      question?: unknown;
+      options?: unknown;
+    };
+    if (typeof parsed.question !== 'string' || !Array.isArray(parsed.options)) return null;
+    const options = parsed.options
+      .map((o) => (o && typeof o === 'object' && 'label' in o && typeof (o as { label: unknown }).label === 'string'
+        ? { label: (o as { label: string }).label }
+        : null))
+      .filter((o): o is { label: string } => o !== null);
+    if (options.length === 0) return null;
+    return { question: parsed.question, options };
+  } catch {
+    return null;
+  }
+}
+
+function buildTurns(messages: UIMessage[]): Turn[] {
+  const turns: Turn[] = [];
+  for (const m of messages) {
+    if (m.role === 'user') {
+      turns.push({ user: m, intermediate: [], final: null });
+      continue;
+    }
+    const last = turns[turns.length - 1];
+    if (!last) continue;
+    const isFinalAssistant =
+      m.role === 'assistant' && !(m.tool_calls && m.tool_calls.length > 0);
+    if (isFinalAssistant) {
+      last.final = m;
+    } else {
+      last.intermediate.push(m);
+    }
+  }
+  return turns;
+}
+
 export function AssistantApp() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
@@ -50,6 +112,8 @@ export function AssistantApp() {
   const [extracting, setExtracting] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [streamingContent, setStreamingContent] = useState<string | null>(null);
+  const [status, setStatus] = useState<Status>(null);
 
   const scrollerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -65,7 +129,7 @@ export function AssistantApp() {
   useEffect(() => {
     const el = scrollerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [messages, streamingContent, status]);
 
   async function loadHistory() {
     try {
@@ -107,6 +171,8 @@ export function AssistantApp() {
       if ((!text.trim() && attachedImages.length === 0) || sending) return;
       setSending(true);
       setError(null);
+      setStreamingContent(null);
+      setStatus({ kind: 'thinking' });
 
       const displayContent =
         attachedImages.length > 0
@@ -130,6 +196,7 @@ export function AssistantApp() {
             conversation_id: conversationId,
             message: text || '(see attached images)',
             images: attachedImages.length > 0 ? attachedImages.map((i) => i.dataUrl) : undefined,
+            tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
           }),
         });
         if (!res.ok || !res.body) {
@@ -164,6 +231,8 @@ export function AssistantApp() {
         setError((err as Error).message ?? 'Request failed');
       } finally {
         setSending(false);
+        setStatus(null);
+        setStreamingContent(null);
         void loadHistory();
       }
     },
@@ -184,6 +253,14 @@ export function AssistantApp() {
             : msg,
         ),
       );
+    } else if (type === 'assistant_delta') {
+      const delta = (ev.content_delta as string) ?? '';
+      if (!delta) return;
+      setStreamingContent((prev) => (prev ?? '') + delta);
+      setStatus(null);
+    } else if (type === 'tool_call_start') {
+      const name = (ev.name as string) ?? 'tool';
+      setStatus({ kind: 'calling', name });
     } else if (type === 'assistant_message') {
       const msg: UIMessage = {
         id: (ev.id as string) ?? `asst-${Date.now()}-${Math.random()}`,
@@ -193,6 +270,14 @@ export function AssistantApp() {
         created_at: (ev.created_at as string) ?? new Date().toISOString(),
       };
       setMessages((m) => [...m, msg]);
+      setStreamingContent(null);
+      // If this turn still has tool calls queued, we're about to execute them.
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        const firstName = msg.tool_calls[0]?.function.name ?? 'tool';
+        setStatus({ kind: 'calling', name: firstName });
+      } else {
+        setStatus(null);
+      }
     } else if (type === 'tool_result') {
       const msg: UIMessage = {
         id: (ev.id as string) ?? `tool-${Date.now()}-${Math.random()}`,
@@ -203,10 +288,22 @@ export function AssistantApp() {
         created_at: (ev.created_at as string) ?? new Date().toISOString(),
       };
       setMessages((m) => [...m, msg]);
+      setStatus({ kind: 'thinking' });
+    } else if (type === 'done') {
+      setStatus(null);
     } else if (type === 'error') {
       setError((ev.message as string) ?? 'Agent error');
+      setStatus(null);
     }
   }
+
+  const handleOptionPick = useCallback(
+    (label: string) => {
+      if (sending) return;
+      void handleSend(label, []);
+    },
+    [sending, handleSend],
+  );
 
   function submit() {
     const text = input.trim();
@@ -253,7 +350,6 @@ export function AssistantApp() {
             { id: `img-${Date.now()}-${Math.random()}`, dataUrl, name: file.name || 'image' },
           ]);
         } else {
-          // Extract text server-side (PDFs + plain text), append to composer
           const form = new FormData();
           form.append('file', file);
           const res = await fetch('/api/extract-file', { method: 'POST', body: form });
@@ -284,10 +380,6 @@ export function AssistantApp() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
       audioChunksRef.current = [];
-      // Pick a mime type OpenAI accepts. Chromium defaults to
-      // audio/webm;codecs=opus; Safari emits audio/mp4 by default. The newer
-      // gpt-4o-*-transcribe models 400 if the extension doesn't match the
-      // actual container, so we pick explicitly and name the file to match.
       const candidates = [
         'audio/webm;codecs=opus',
         'audio/webm',
@@ -306,7 +398,7 @@ export function AssistantApp() {
         const actualMime = mr.mimeType || 'audio/webm';
         const blob = new Blob(audioChunksRef.current, { type: actualMime });
         audioChunksRef.current = [];
-        if (blob.size < 500) return; // ignore accidental taps
+        if (blob.size < 500) return;
         setTranscribing(true);
         try {
           const ext = actualMime.includes('mp4')
@@ -348,7 +440,8 @@ export function AssistantApp() {
     setRecording(false);
   }
 
-  const empty = messages.length === 0;
+  const turns = useMemo(() => buildTurns(messages), [messages]);
+  const empty = messages.length === 0 && streamingContent === null;
 
   return (
     <div className="mx-auto flex h-[100dvh] max-w-3xl flex-col">
@@ -408,17 +501,32 @@ export function AssistantApp() {
       </header>
 
       <div ref={scrollerRef} className="flex-1 overflow-y-auto px-4 md:px-6">
-        {empty ? <EmptyState /> : <MessageList messages={messages} />}
+        {empty ? (
+          <EmptyState />
+        ) : (
+          <TurnList
+            turns={turns}
+            streamingContent={streamingContent}
+            status={status}
+            sending={sending}
+            onOptionPick={handleOptionPick}
+          />
+        )}
         {error && (
           <div className="my-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">
             {error}
           </div>
         )}
-        {sending && <ThinkingDots />}
       </div>
 
       <form onSubmit={onSubmit} className="px-4 pb-4 pt-2 md:px-6 md:pb-6">
-        <div className="flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-white px-3 py-2 shadow-sm focus-within:border-amber-400/50 focus-within:ring-2 focus-within:ring-amber-400/20 dark:border-zinc-800 dark:bg-zinc-950/60">
+        <div
+          className={`flex flex-col gap-2 rounded-2xl border bg-white px-3 py-2 shadow-sm transition focus-within:border-amber-400/50 focus-within:ring-2 focus-within:ring-amber-400/20 dark:bg-zinc-950/60 ${
+            sending
+              ? 'border-amber-400/40 ring-2 ring-amber-400/10 dark:border-amber-400/30'
+              : 'border-zinc-200 dark:border-zinc-800'
+          }`}
+        >
           {images.length > 0 && (
             <ul className="flex flex-wrap gap-2 px-0.5 pt-1">
               {images.map((img) => (
@@ -558,66 +666,291 @@ function EmptyState() {
   );
 }
 
-function ThinkingDots() {
-  return (
-    <div className="my-2 flex items-center gap-1.5 px-1 py-2 text-zinc-500">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400" />
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400 [animation-delay:150ms]" />
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400 [animation-delay:300ms]" />
-    </div>
-  );
-}
-
-function MessageList({ messages }: { messages: UIMessage[] }) {
+function TurnList({
+  turns,
+  streamingContent,
+  status,
+  sending,
+  onOptionPick,
+}: {
+  turns: Turn[];
+  streamingContent: string | null;
+  status: Status;
+  sending: boolean;
+  onOptionPick: (label: string) => void;
+}) {
   return (
     <ul className="flex flex-col gap-4 py-4">
-      {messages.map((m) => (
-        <MessageBlock key={m.id} message={m} />
-      ))}
+      {turns.map((t, i) => {
+        const isLast = i === turns.length - 1;
+        return (
+          <TurnBlock
+            key={t.user.id}
+            turn={t}
+            streamingContent={isLast ? streamingContent : null}
+            status={isLast && sending ? status : null}
+            onOptionPick={onOptionPick}
+          />
+        );
+      })}
     </ul>
   );
 }
 
-function MessageBlock({ message }: { message: UIMessage }) {
-  if (message.role === 'user') {
-    return (
-      <li className="flex justify-end">
-        <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-amber-400 px-4 py-2 text-sm text-zinc-950 shadow-sm">
-          {message.content}
-        </div>
-      </li>
-    );
-  }
+function TurnBlock({
+  turn,
+  streamingContent,
+  status,
+  onOptionPick,
+}: {
+  turn: Turn;
+  streamingContent: string | null;
+  status: Status;
+  onOptionPick: (label: string) => void;
+}) {
+  const finalAsk = turn.final ? parseAsk(turn.final.content) : null;
+  const finalContent = turn.final?.content;
+  const finalPlainContent = finalAsk ? null : finalContent;
 
-  if (message.role === 'tool') {
-    return (
-      <li>
-        <ToolResultChip
-          name={message.name ?? 'tool'}
-          content={message.content ?? ''}
-        />
-      </li>
-    );
-  }
-
-  // assistant
   return (
     <li className="flex flex-col gap-2">
-      {message.content && (
-        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-zinc-100 px-4 py-2 text-sm text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100">
-          {message.content}
+      <div className="flex justify-end">
+        <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-amber-400 px-4 py-2 text-sm text-zinc-950 shadow-sm">
+          {turn.user.content}
+        </div>
+      </div>
+
+      {turn.intermediate.length > 0 && (
+        <ThinkingBlock messages={turn.intermediate} />
+      )}
+
+      {finalPlainContent && (
+        <AssistantBubble content={finalPlainContent} />
+      )}
+
+      {finalAsk && (
+        <ClarificationCard
+          question={finalAsk.question}
+          options={finalAsk.options}
+          onPick={onOptionPick}
+        />
+      )}
+
+      {streamingContent !== null && (
+        <AssistantBubble content={streamingContent} streaming />
+      )}
+
+      {status && <StatusLine status={status} />}
+    </li>
+  );
+}
+
+function AssistantBubble({ content, streaming }: { content: string; streaming?: boolean }) {
+  return (
+    <div className="max-w-[85%] rounded-2xl bg-zinc-100 px-4 py-2 text-sm text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100">
+      <MarkdownContent content={content} />
+      {streaming && (
+        <span className="ml-0.5 inline-block h-3.5 w-0.5 translate-y-0.5 animate-pulse bg-zinc-500 align-middle dark:bg-zinc-400" />
+      )}
+    </div>
+  );
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="md-body">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0">{children}</p>,
+          ul: ({ children }) => (
+            <ul className="my-1.5 list-disc space-y-0.5 pl-5 first:mt-0 last:mb-0">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="my-1.5 list-decimal space-y-0.5 pl-5 first:mt-0 last:mb-0">{children}</ol>
+          ),
+          li: ({ children }) => <li className="leading-snug">{children}</li>,
+          h1: ({ children }) => (
+            <h1 className="mb-1.5 mt-2 text-base font-semibold first:mt-0">{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="mb-1.5 mt-2 text-sm font-semibold first:mt-0">{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="mb-1 mt-2 text-sm font-semibold first:mt-0">{children}</h3>
+          ),
+          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+          em: ({ children }) => <em className="italic">{children}</em>,
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="text-amber-700 underline decoration-amber-400/50 underline-offset-2 hover:decoration-amber-500 dark:text-amber-300"
+            >
+              {children}
+            </a>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="my-1.5 border-l-2 border-zinc-300 pl-3 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+              {children}
+            </blockquote>
+          ),
+          hr: () => <hr className="my-2 border-zinc-200 dark:border-zinc-800" />,
+          code: ({ className, children }) => {
+            const isBlock = /language-/.test(className ?? '');
+            if (isBlock) {
+              return <code className="font-mono text-[12px] leading-relaxed">{children}</code>;
+            }
+            return (
+              <code className="rounded bg-zinc-200/70 px-1 py-0.5 font-mono text-[12px] text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
+                {children}
+              </code>
+            );
+          },
+          pre: ({ children }) => (
+            <pre className="my-1.5 overflow-x-auto rounded-lg bg-zinc-900 px-3 py-2 text-zinc-100 first:mt-0 last:mb-0 dark:bg-zinc-950">
+              {children}
+            </pre>
+          ),
+          table: ({ children }) => (
+            <div className="my-1.5 overflow-x-auto">
+              <table className="w-full border-collapse text-[12px]">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border-b border-zinc-300 px-2 py-1 text-left font-semibold dark:border-zinc-700">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border-b border-zinc-200 px-2 py-1 dark:border-zinc-800">{children}</td>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function StatusLine({ status }: { status: NonNullable<Status> }) {
+  const label =
+    status.kind === 'thinking'
+      ? 'Thinking'
+      : `Calling ${status.name}`;
+  return (
+    <div className="flex items-center gap-2 px-1 py-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+      </span>
+      <span>{label}</span>
+      <span className="inline-flex gap-0.5">
+        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400" />
+        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400 [animation-delay:150ms]" />
+        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400 [animation-delay:300ms]" />
+      </span>
+    </div>
+  );
+}
+
+function ThinkingBlock({ messages }: { messages: UIMessage[] }) {
+  const [open, setOpen] = useState(false);
+  const toolNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const m of messages) {
+      if (m.role === 'assistant' && m.tool_calls) {
+        for (const tc of m.tool_calls) names.add(tc.function.name);
+      }
+    }
+    return Array.from(names);
+  }, [messages]);
+  const summary = toolNames.length > 0 ? toolNames.join(', ') : `${messages.length} step${messages.length === 1 ? '' : 's'}`;
+
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/40">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 text-left text-xs text-zinc-600 transition hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+      >
+        <svg
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          className={`h-3 w-3 flex-none transition-transform ${open ? 'rotate-90' : ''}`}
+        >
+          <path d="M7 5l6 5-6 5V5z" />
+        </svg>
+        <span className="font-medium">Thinking</span>
+        <span className="truncate text-[11px] text-zinc-400 dark:text-zinc-500">
+          {summary}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-2 flex flex-col gap-1.5 border-l border-zinc-200 pl-3 dark:border-zinc-800">
+          {messages.map((m) => {
+            if (m.role === 'tool') {
+              return (
+                <ToolResultChip
+                  key={m.id}
+                  name={m.name ?? 'tool'}
+                  content={m.content ?? ''}
+                />
+              );
+            }
+            return (
+              <div key={m.id} className="flex flex-col gap-1">
+                {m.content && (
+                  <div className="text-[12px] text-zinc-700 dark:text-zinc-300">
+                    <MarkdownContent content={m.content} />
+                  </div>
+                )}
+                {m.tool_calls?.map((tc) => (
+                  <ToolCallChip
+                    key={tc.id}
+                    name={tc.function.name}
+                    rawArgs={tc.function.arguments}
+                  />
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
-      {message.tool_calls && message.tool_calls.length > 0 && (
-        <ul className="flex flex-col gap-1.5">
-          {message.tool_calls.map((tc) => (
-            <li key={tc.id}>
-              <ToolCallChip name={tc.function.name} rawArgs={tc.function.arguments} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </li>
+    </div>
+  );
+}
+
+function ClarificationCard({
+  question,
+  options,
+  onPick,
+}: {
+  question: string;
+  options: { label: string }[];
+  onPick: (label: string) => void;
+}) {
+  return (
+    <div className="max-w-[85%] rounded-2xl border border-amber-300/60 bg-amber-50/60 px-4 py-3 shadow-sm dark:border-amber-400/20 dark:bg-amber-400/5">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3">
+          <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm0 12a1 1 0 110-2 1 1 0 010 2zm1-5a1 1 0 01-2 0V7a1 1 0 112 0v2z" />
+        </svg>
+        Quick question
+      </div>
+      <p className="mt-1 text-sm text-zinc-900 dark:text-zinc-100">{question}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {options.map((opt) => (
+          <button
+            key={opt.label}
+            onClick={() => onPick(opt.label)}
+            className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm transition hover:border-amber-400/60 hover:bg-amber-50 hover:text-amber-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-amber-400/40 dark:hover:bg-amber-400/10 dark:hover:text-amber-200"
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -14,17 +14,14 @@ export interface AgentTool {
 }
 
 export type AgentEvent =
+  | { type: 'assistant_delta'; content_delta: string }
+  | { type: 'tool_call_start'; tool_call_id: string; name: string }
   | {
       type: 'assistant_message';
       content: string | null;
       tool_calls: ChatCompletionMessageToolCall[] | null;
     }
-  | {
-      type: 'tool_result';
-      tool_call_id: string;
-      name: string;
-      content: string;
-    }
+  | { type: 'tool_result'; tool_call_id: string; name: string; content: string }
   | { type: 'done'; content: string }
   | { type: 'error'; message: string };
 
@@ -52,34 +49,68 @@ export async function runAgent(opts: RunAgentOptions): Promise<void> {
 
   const max = opts.maxIterations ?? 8;
   for (let i = 0; i < max; i++) {
-    const completion = await opts.openai.chat.completions.create({
+    const stream = await opts.openai.chat.completions.create({
       model: opts.model,
       messages,
       tools: toolDefs,
       tool_choice: 'auto',
       temperature: 0.3,
+      stream: true,
     });
-    const msg = completion.choices[0]?.message;
-    if (!msg) {
-      await opts.onEvent({ type: 'error', message: 'Empty completion from model.' });
-      return;
+
+    let content = '';
+    const toolCalls: ChatCompletionMessageToolCall[] = [];
+    const announced = new Set<number>();
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta;
+      if (!delta) continue;
+      if (delta.content) {
+        content += delta.content;
+        await opts.onEvent({ type: 'assistant_delta', content_delta: delta.content });
+      }
+      if (delta.tool_calls) {
+        for (const tcDelta of delta.tool_calls) {
+          const idx = tcDelta.index;
+          let tc = toolCalls[idx];
+          if (!tc) {
+            tc = { id: tcDelta.id ?? '', type: 'function', function: { name: '', arguments: '' } };
+            toolCalls[idx] = tc;
+          }
+          if (tcDelta.id) tc.id = tcDelta.id;
+          if (tcDelta.function?.name) tc.function.name += tcDelta.function.name;
+          if (tcDelta.function?.arguments) tc.function.arguments += tcDelta.function.arguments;
+          if (!announced.has(idx) && tc.id && tc.function.name) {
+            announced.add(idx);
+            await opts.onEvent({
+              type: 'tool_call_start',
+              tool_call_id: tc.id,
+              name: tc.function.name,
+            });
+          }
+        }
+      }
     }
 
-    messages.push(msg);
+    const assistantMsg: ChatCompletionMessageParam =
+      toolCalls.length > 0
+        ? { role: 'assistant', content: content || null, tool_calls: toolCalls }
+        : { role: 'assistant', content: content || null };
+    messages.push(assistantMsg);
 
     await opts.onEvent({
       type: 'assistant_message',
-      content: msg.content ?? null,
-      tool_calls: msg.tool_calls ?? null,
+      content: content || null,
+      tool_calls: toolCalls.length > 0 ? toolCalls : null,
     });
 
-    if (!msg.tool_calls || msg.tool_calls.length === 0) {
-      await opts.onEvent({ type: 'done', content: msg.content ?? '' });
+    if (toolCalls.length === 0) {
+      await opts.onEvent({ type: 'done', content });
       return;
     }
 
-    for (const call of msg.tool_calls) {
-      if (call.type !== 'function') continue;
+    for (const call of toolCalls) {
+      if (!call || call.type !== 'function') continue;
       const name = call.function.name;
       const handler = handlers.get(name);
 
