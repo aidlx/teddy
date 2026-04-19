@@ -264,6 +264,7 @@ export default function CalendarPage() {
         id: string;
         title: string;
         color: string | null;
+        time: string | null;
         detail: string | null;
         exact: string | null;
       };
@@ -295,6 +296,7 @@ export default function CalendarPage() {
         id: t.id,
         title: t.title,
         color: course?.color ?? null,
+        time: t.due_at && t.due_kind !== 'date' ? fmtTime(t.due_at, displayTz) : null,
         detail: formatTaskDue(t, displayTz),
         exact: formatTaskDueExact(t, displayTz),
       });
@@ -505,7 +507,9 @@ export default function CalendarPage() {
                       {it.kind === 'event' && it.time && (
                         <span className="flex-none opacity-70">{it.time}</span>
                       )}
-                      {it.kind === 'task' && <span className="flex-none opacity-70">✓</span>}
+                      {it.kind === 'task' && (
+                        <span className="flex-none opacity-70">{it.time ?? '✓'}</span>
+                      )}
                       <span className="truncate text-zinc-800 dark:text-zinc-200">{it.title}</span>
                     </div>
                   ))}
@@ -524,6 +528,9 @@ export default function CalendarPage() {
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
             {selected.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
           </h2>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            Events and task deadlines for this day.
+          </p>
           <ul className="flex flex-col gap-1.5">
             {selectedItems.map((it, i) => (
               <li
@@ -545,7 +552,16 @@ export default function CalendarPage() {
                     style={{ backgroundColor: it.color }}
                   />
                 )}
-                <span className="truncate text-zinc-900 dark:text-zinc-100">{it.title}</span>
+                {it.kind === 'task' ? (
+                  <Link
+                    href={`/tasks/${it.id}`}
+                    className="min-w-0 truncate text-zinc-900 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-950 hover:decoration-zinc-500 dark:text-zinc-100 dark:decoration-zinc-700 dark:hover:text-zinc-50"
+                  >
+                    {it.title}
+                  </Link>
+                ) : (
+                  <span className="truncate text-zinc-900 dark:text-zinc-100">{it.title}</span>
+                )}
                 {it.kind === 'event' && it.time && (
                   <span className="ml-auto flex-none text-xs tabular-nums text-zinc-500">
                     {it.time}

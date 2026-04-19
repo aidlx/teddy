@@ -91,7 +91,12 @@ export default async function CaptureDetailPage({
                     title={course.name}
                   />
                 )}
-                <span className="truncate text-zinc-900 dark:text-zinc-100">{t.title}</span>
+                <Link
+                  href={`/tasks/${t.id}`}
+                  className="truncate text-zinc-900 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-950 hover:decoration-zinc-500 dark:text-zinc-100 dark:decoration-zinc-700 dark:hover:text-zinc-50"
+                >
+                  {t.title}
+                </Link>
                 {t.due_at && (
                   <span className="ml-auto flex-none text-xs text-zinc-500" title={formatTaskDueExact(t, userTz)}>
                     {formatTaskDue(t, userTz)}

@@ -144,46 +144,81 @@ export default function TasksPage() {
           return (
             <li
               key={t.id}
-              className="group flex items-center gap-2.5 rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm transition hover:border-zinc-300 hover:bg-zinc-100/60 dark:border-zinc-900 dark:bg-zinc-950/40 dark:hover:border-zinc-800 dark:hover:bg-zinc-900/40"
+              className="group flex gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm transition hover:border-zinc-300 hover:bg-zinc-100/60 dark:border-zinc-900 dark:bg-zinc-950/40 dark:hover:border-zinc-800 dark:hover:bg-zinc-900/40"
             >
               <input
                 type="checkbox"
                 checked={!!t.completed_at}
                 onChange={() => toggleComplete(t)}
-                className="h-4 w-4 flex-none cursor-pointer accent-amber-400"
+                className="mt-1 h-4 w-4 flex-none cursor-pointer accent-amber-400"
               />
-              {course && (
-                <span
-                  className="h-2 w-2 flex-none rounded-full"
-                  style={{ backgroundColor: course.color ?? '#6366f1' }}
-                  title={course.name}
-                />
-              )}
-              <span
-                className={`truncate ${t.completed_at ? 'text-zinc-400 line-through dark:text-zinc-500' : 'text-zinc-900 dark:text-zinc-100'}`}
-              >
-                {t.title}
-              </span>
-              {t.due_at && (
-                <span
-                  title={formatTaskDueExact(t, userTz)}
-                  className={`ml-auto flex-none text-xs ${overdue ? 'text-rose-600 dark:text-rose-400' : 'text-zinc-500'}`}
-                >
-                  {formatTaskDue(t, userTz)}
-                </span>
-              )}
-              {t.capture_id && (
-                <Link
-                  href={`/captures/${t.capture_id}`}
-                  className={`flex-none text-xs text-zinc-500 transition hover:text-zinc-800 dark:text-zinc-600 dark:hover:text-zinc-300 ${t.due_at ? '' : 'ml-auto'}`}
-                  title="View source capture"
-                >
-                  source
-                </Link>
-              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  {course && (
+                    <span
+                      className="h-2 w-2 flex-none rounded-full"
+                      style={{ backgroundColor: course.color ?? '#6366f1' }}
+                      title={course.name}
+                    />
+                  )}
+                  <Link
+                    href={`/tasks/${t.id}`}
+                    className={`min-w-0 truncate font-medium transition hover:text-amber-700 dark:hover:text-amber-300 ${
+                      t.completed_at
+                        ? 'text-zinc-400 line-through dark:text-zinc-500'
+                        : 'text-zinc-900 dark:text-zinc-100'
+                    }`}
+                  >
+                    {t.title}
+                  </Link>
+                  {course && (
+                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+                      {course.name}
+                    </span>
+                  )}
+                  {t.due_at && (
+                    <span
+                      title={formatTaskDueExact(t, userTz)}
+                      className={`ml-auto flex-none text-xs ${overdue ? 'text-rose-600 dark:text-rose-400' : 'text-zinc-500'}`}
+                    >
+                      {formatTaskDue(t, userTz)}
+                    </span>
+                  )}
+                </div>
+                {(t.description || t.capture_id || t.due_at) && (
+                  <div className="mt-1.5 flex flex-col gap-1">
+                    {t.description && (
+                      <p className="line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
+                        {t.description}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-500">
+                      {t.due_at && (
+                        <span title={formatTaskDueExact(t, userTz)}>
+                          {formatTaskDueExact(t, userTz)}
+                        </span>
+                      )}
+                      <Link
+                        href={`/tasks/${t.id}`}
+                        className="underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-900 hover:decoration-zinc-500 dark:decoration-zinc-700 dark:hover:text-zinc-200"
+                      >
+                        Open details
+                      </Link>
+                      {t.capture_id && (
+                        <Link
+                          href={`/captures/${t.capture_id}`}
+                          className="underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-900 hover:decoration-zinc-500 dark:decoration-zinc-700 dark:hover:text-zinc-200"
+                        >
+                          Source capture
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
               <button
                 onClick={() => deleteTask(t.id)}
-                className="flex-none text-lg leading-none text-zinc-400 transition hover:text-rose-600 dark:text-zinc-700 dark:hover:text-rose-400"
+                className="flex-none self-start text-lg leading-none text-zinc-400 transition hover:text-rose-600 dark:text-zinc-700 dark:hover:text-rose-400"
                 aria-label="Delete task"
               >
                 ×
