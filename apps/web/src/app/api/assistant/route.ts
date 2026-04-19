@@ -143,6 +143,11 @@ function renderDirectAssistantMessage(
     const title = typeof obj.title === 'string' ? obj.title : 'the task';
     return `Created "${title}"${formatTaskDue(obj)}.`;
   }
+  if (toolName === 'create_event_series_reminders') {
+    const created = typeof obj.created === 'number' ? obj.created : 0;
+    if (created === 0) return 'No matching events, so no reminders created.';
+    return `Created ${created} reminder${created === 1 ? '' : 's'}, one per scheduled class.`;
+  }
   if (toolName === 'update_task') {
     const title = typeof obj.title === 'string' ? obj.title : 'the task';
     return `Updated "${title}"${formatTaskDue(obj)}.`;

@@ -1067,6 +1067,105 @@ export function buildTools(
 
     {
       definition: strictFunction(
+        'create_event_series_reminders',
+        'Create one reminder task per event in a course series (e.g. "remind me before each ML1 class"). Inserts all tasks in a single call. Prefer this over repeated create_task when the user says "each/every <course> class/lecture/lab".',
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            title: { type: 'string' },
+            description: { type: ['string', 'null'] },
+            course_ref: {
+              type: 'string',
+              description: 'Course uuid, code, or name fragment. Required — series reminders must be scoped to a course.',
+            },
+            offset_minutes: {
+              type: 'integer',
+              description: 'Minutes relative to each event start. 0 = at start, negative = before, positive = after.',
+            },
+            from: timeRefSchemaJson(),
+            to: timeRefSchemaJson(),
+          },
+          required: ['title', 'description', 'course_ref', 'offset_minutes', 'from', 'to'],
+        },
+      ),
+      handler: async (args) => {
+        const title = asString(args.title);
+        if (!title) throw new Error('title is required');
+        const requestedCourseRef = asString(args.course_ref);
+        if (!requestedCourseRef) {
+          return {
+            error: 'course_required',
+            reason: 'create_event_series_reminders requires a course_ref to anchor the series.',
+            instruction: 'Ask the user which course the series of reminders should follow.',
+          };
+        }
+        const course = await resolveCourseWriteForAction(
+          'create_event_series_reminders',
+          args as ToolArgs,
+          requestedCourseRef,
+        );
+        if (course.kind === 'error') return course.error;
+        if (course.kind === 'clarification') return course.result;
+        if (!course.id) {
+          return {
+            error: 'course_required',
+            reason: 'Series reminders must resolve to a specific course.',
+            instruction: 'Ask the user which course to anchor the reminders to.',
+          };
+        }
+        const offsetMinutes =
+          typeof args.offset_minutes === 'number' && Number.isFinite(args.offset_minutes)
+            ? Math.trunc(args.offset_minutes)
+            : 0;
+        const baseNow = new Date();
+        const from = resolveTimeRef(TimeRefSchema.parse(args.from), userTz, baseNow);
+        const to = resolveTimeRef(TimeRefSchema.parse(args.to), userTz, baseNow);
+        if (new Date(from).getTime() > new Date(to).getTime()) {
+          return {
+            error: 'invalid_time_range',
+            reason: '`from` must be earlier than or equal to `to`.',
+          };
+        }
+        const { data: eventRows, error: eventsErr } = await supabase
+          .from('events')
+          .select('id, start_at, source_tz, course_id')
+          .eq('owner_id', userId)
+          .eq('course_id', course.id)
+          .gte('start_at', from)
+          .lte('start_at', to)
+          .order('start_at');
+        if (eventsErr) throw new Error(eventsErr.message);
+        const description = asString(args.description) ?? null;
+        if (!eventRows || eventRows.length === 0) {
+          return {
+            created: 0,
+            tasks: [],
+            reason: 'No events for this course in the given range.',
+          };
+        }
+        const inserts = eventRows.map((ev) => ({
+          owner_id: userId,
+          title,
+          description,
+          course_id: ev.course_id,
+          due_at: new Date(new Date(ev.start_at).getTime() + offsetMinutes * 60_000).toISOString(),
+          due_kind: 'event',
+          due_tz: ev.source_tz ?? userTz,
+          anchor_event_id: ev.id,
+          offset_minutes: offsetMinutes,
+        }));
+        const { data, error } = await supabase.from('tasks').insert(inserts).select();
+        if (error) throw new Error(error.message);
+        return {
+          created: data?.length ?? 0,
+          tasks: (data ?? []).map(decorateTask),
+        };
+      },
+    },
+
+    {
+      definition: strictFunction(
         'update_task',
         'Update fields on an existing task. Use the set_* flags to declare which fields should change.',
         {

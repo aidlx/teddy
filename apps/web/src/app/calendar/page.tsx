@@ -272,15 +272,14 @@ export default function CalendarPage() {
   const itemsByDay = useMemo(() => {
     const map = new Map<string, CellItem[]>();
     for (const ev of events) {
-      const tz = ev.source_tz ?? displayTz;
-      const k = dayKeyInTz(ev.start_at, tz);
+      const k = dayKeyInTz(ev.start_at, displayTz);
       const arr = map.get(k) ?? [];
       const course = ev.course_id ? coursesById.get(ev.course_id) : null;
       arr.push({
         kind: 'event',
         id: ev.id,
         title: ev.title,
-        time: ev.all_day ? null : fmtTime(ev.start_at, tz),
+        time: ev.all_day ? null : fmtTime(ev.start_at, displayTz),
         color: course?.color ?? null,
         allDay: ev.all_day,
       });
