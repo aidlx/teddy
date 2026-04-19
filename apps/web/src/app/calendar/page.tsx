@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import {
+  currentDateKey,
+  formatTaskDue,
+  formatTaskDueExact,
+  parseDateKey,
+  taskDayKey,
+} from '@/lib/format';
 
 interface Subscription {
   id: string;
@@ -21,7 +28,7 @@ interface EventRow {
   end_at: string | null;
   all_day: boolean;
   course_id: string | null;
-  subscription_id: string | null;
+  source_tz: string | null;
 }
 
 interface Course {
@@ -34,6 +41,10 @@ interface TaskRow {
   id: string;
   title: string;
   due_at: string | null;
+  due_kind: string | null;
+  due_tz: string | null;
+  anchor_event_id: string | null;
+  offset_minutes: number | null;
   course_id: string | null;
 }
 
@@ -108,7 +119,11 @@ export default function CalendarPage() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
+  const [userTz, setUserTz] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [cursor, setCursor] = useState(() => {
+    const initialTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return startOfMonth(parseDateKey(currentDateKey(initialTz)));
+  });
   const [selected, setSelected] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -124,17 +139,30 @@ export default function CalendarPage() {
 
   async function loadAll() {
     const supabase = getBrowserSupabase();
-    const [s, e, t, c] = await Promise.all([
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const [s, e, t, c, p] = await Promise.all([
       supabase.from('calendar_subscriptions').select('*').order('created_at'),
-      supabase.from('events').select('*').order('start_at'),
-      supabase.from('tasks').select('id, title, due_at, course_id').is('completed_at', null),
+      supabase
+        .from('events')
+        .select('id, title, location, start_at, end_at, all_day, course_id, source_tz')
+        .order('start_at'),
+      supabase
+        .from('tasks')
+        .select('id, title, due_at, due_kind, due_tz, anchor_event_id, offset_minutes, course_id')
+        .is('completed_at', null),
       supabase.from('courses').select('id, name, color'),
+      supabase.from('profiles').select('timezone').maybeSingle(),
     ]);
     if (s.error) setError(s.error.message);
+    if (e.error) setError(e.error.message);
+    if (t.error) setError(t.error.message);
+    if (c.error) setError(c.error.message);
+    if (p.error) setError(p.error.message);
     setSubs(s.data ?? []);
     setEvents(e.data ?? []);
     setTasks(t.data ?? []);
     setCourses(c.data ?? []);
+    setUserTz(p.data?.timezone ?? browserTz);
   }
 
   async function readJson(res: Response): Promise<Record<string, unknown>> {
@@ -223,24 +251,27 @@ export default function CalendarPage() {
   }
 
   const coursesById = useMemo(() => new Map(courses.map((c) => [c.id, c] as const)), [courses]);
-  const subsById = useMemo(() => new Map(subs.map((s) => [s.id, s] as const)), [subs]);
-  // Display tz for things without a subscription (tasks, all-day default): use
-  // the first subscription's tz if any, otherwise the browser.
   const displayTz = useMemo(() => {
-    return subs[0]?.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  }, [subs]);
+    return userTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }, [userTz]);
   const days = useMemo(() => buildMonthGrid(cursor), [cursor]);
-  const today = new Date();
+  const todayKey = useMemo(() => currentDateKey(displayTz), [displayTz]);
 
   type CellItem =
     | { kind: 'event'; id: string; title: string; time: string | null; color: string | null; allDay: boolean }
-    | { kind: 'task'; id: string; title: string; color: string | null };
+    | {
+        kind: 'task';
+        id: string;
+        title: string;
+        color: string | null;
+        detail: string | null;
+        exact: string | null;
+      };
 
   const itemsByDay = useMemo(() => {
     const map = new Map<string, CellItem[]>();
     for (const ev of events) {
-      const evTz = ev.subscription_id ? subsById.get(ev.subscription_id)?.tz : undefined;
-      const tz = evTz ?? displayTz;
+      const tz = ev.source_tz ?? displayTz;
       const k = dayKeyInTz(ev.start_at, tz);
       const arr = map.get(k) ?? [];
       const course = ev.course_id ? coursesById.get(ev.course_id) : null;
@@ -255,15 +286,22 @@ export default function CalendarPage() {
       map.set(k, arr);
     }
     for (const t of tasks) {
-      if (!t.due_at) continue;
-      const k = dayKeyInTz(t.due_at, displayTz);
+      const k = taskDayKey(t, displayTz);
+      if (!k) continue;
       const arr = map.get(k) ?? [];
       const course = t.course_id ? coursesById.get(t.course_id) : null;
-      arr.push({ kind: 'task', id: t.id, title: t.title, color: course?.color ?? null });
+      arr.push({
+        kind: 'task',
+        id: t.id,
+        title: t.title,
+        color: course?.color ?? null,
+        detail: formatTaskDue(t, displayTz),
+        exact: formatTaskDueExact(t, displayTz),
+      });
       map.set(k, arr);
     }
     return map;
-  }, [events, tasks, coursesById, subsById, displayTz]);
+  }, [events, tasks, coursesById, displayTz]);
 
   const selectedItems = selected ? itemsByDay.get(gridDayKey(selected)) ?? [] : [];
 
@@ -399,10 +437,11 @@ export default function CalendarPage() {
           </button>
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold tracking-tight">{fmtMonth(cursor)}</h2>
-            <button
-              onClick={() => {
-                setCursor(startOfMonth(new Date()));
-                setSelected(new Date());
+          <button
+            onClick={() => {
+                const today = parseDateKey(todayKey);
+                setCursor(startOfMonth(today));
+                setSelected(today);
               }}
               className="text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-800 dark:decoration-zinc-700 dark:hover:text-zinc-200"
             >
@@ -428,9 +467,9 @@ export default function CalendarPage() {
           ))}
           {days.map((d) => {
             const inMonth = d.getMonth() === cursor.getMonth();
-            const isToday = sameDay(d, today);
-            const isSelected = selected && sameDay(d, selected);
             const key = gridDayKey(d);
+            const isToday = key === todayKey;
+            const isSelected = selected && sameDay(d, selected);
             const items = itemsByDay.get(key) ?? [];
             return (
               <button
@@ -510,6 +549,11 @@ export default function CalendarPage() {
                 {it.kind === 'event' && it.time && (
                   <span className="ml-auto flex-none text-xs tabular-nums text-zinc-500">
                     {it.time}
+                  </span>
+                )}
+                {it.kind === 'task' && it.detail && (
+                  <span className="ml-auto flex-none text-xs text-zinc-500" title={it.exact ?? undefined}>
+                    {it.detail}
                   </span>
                 )}
               </li>

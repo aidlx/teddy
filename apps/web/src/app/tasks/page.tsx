@@ -3,13 +3,17 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { formatRelative, isOverdue } from '@/lib/format';
+import { formatTaskDue, formatTaskDueExact, isTaskOverdue } from '@/lib/format';
 
 interface Task {
   id: string;
   title: string;
   description: string | null;
   due_at: string | null;
+  due_kind: string | null;
+  due_tz: string | null;
+  anchor_event_id: string | null;
+  offset_minutes: number | null;
   completed_at: string | null;
   course_id: string | null;
   capture_id: string | null;
@@ -25,6 +29,7 @@ interface Course {
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [userTz, setUserTz] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [filter, setFilter] = useState<'open' | 'done' | 'all'>('open');
   const [courseFilter, setCourseFilter] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
@@ -35,17 +40,23 @@ export default function TasksPage() {
 
   async function load() {
     const supabase = getBrowserSupabase();
-    const [t, c] = await Promise.all([
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const [t, c, p] = await Promise.all([
       supabase
         .from('tasks')
-        .select('*')
+        .select(
+          'id, title, description, due_at, due_kind, due_tz, anchor_event_id, offset_minutes, completed_at, course_id, capture_id, created_at',
+        )
         .order('due_at', { ascending: true, nullsFirst: false }),
       supabase.from('courses').select('id, name, color'),
+      supabase.from('profiles').select('timezone').maybeSingle(),
     ]);
     if (t.error) setError(t.error.message);
     if (c.error) setError(c.error.message);
+    if (p.error) setError(p.error.message);
     setTasks(t.data ?? []);
     setCourses(c.data ?? []);
+    setUserTz(p.data?.timezone ?? browserTz);
   }
 
   async function toggleComplete(task: Task) {
@@ -129,7 +140,7 @@ export default function TasksPage() {
         )}
         {filtered.map((t) => {
           const course = t.course_id ? coursesById.get(t.course_id) : null;
-          const overdue = !t.completed_at && isOverdue(t.due_at);
+          const overdue = !t.completed_at && isTaskOverdue(t, userTz);
           return (
             <li
               key={t.id}
@@ -155,9 +166,10 @@ export default function TasksPage() {
               </span>
               {t.due_at && (
                 <span
+                  title={formatTaskDueExact(t, userTz)}
                   className={`ml-auto flex-none text-xs ${overdue ? 'text-rose-600 dark:text-rose-400' : 'text-zinc-500'}`}
                 >
-                  {formatRelative(t.due_at)}
+                  {formatTaskDue(t, userTz)}
                 </span>
               )}
               {t.capture_id && (

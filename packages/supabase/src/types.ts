@@ -137,6 +137,7 @@ export type Database = {
           location: string | null
           owner_id: string
           source: string
+          source_tz: string
           start_at: string
           subscription_id: string | null
           title: string
@@ -152,6 +153,7 @@ export type Database = {
           location?: string | null
           owner_id: string
           source?: string
+          source_tz?: string
           start_at: string
           subscription_id?: string | null
           title: string
@@ -167,6 +169,7 @@ export type Database = {
           location?: string | null
           owner_id?: string
           source?: string
+          source_tz?: string
           start_at?: string
           subscription_id?: string | null
           title?: string
@@ -314,6 +317,7 @@ export type Database = {
           display_name: string | null
           email: string | null
           id: string
+          timezone: string | null
         }
         Insert: {
           avatar_url?: string | null
@@ -321,6 +325,7 @@ export type Database = {
           display_name?: string | null
           email?: string | null
           id: string
+          timezone?: string | null
         }
         Update: {
           avatar_url?: string | null
@@ -328,44 +333,64 @@ export type Database = {
           display_name?: string | null
           email?: string | null
           id?: string
+          timezone?: string | null
         }
         Relationships: []
       }
       tasks: {
         Row: {
+          anchor_event_id: string | null
           capture_id: string | null
           completed_at: string | null
           course_id: string | null
           created_at: string
           description: string | null
           due_at: string | null
+          due_kind: string
+          due_tz: string | null
           id: string
+          offset_minutes: number
           owner_id: string
           title: string
         }
         Insert: {
+          anchor_event_id?: string | null
           capture_id?: string | null
           completed_at?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
           due_at?: string | null
+          due_kind?: string
+          due_tz?: string | null
           id?: string
+          offset_minutes?: number
           owner_id: string
           title: string
         }
         Update: {
+          anchor_event_id?: string | null
           capture_id?: string | null
           completed_at?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
           due_at?: string | null
+          due_kind?: string
+          due_tz?: string | null
           id?: string
+          offset_minutes?: number
           owner_id?: string
           title?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "tasks_anchor_event_id_fkey"
+            columns: ["anchor_event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "tasks_capture_id_fkey"
             columns: ["capture_id"]

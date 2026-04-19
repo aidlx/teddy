@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { getServerSupabase } from '@/lib/supabase/server';
 import { syncSubscription } from '@/lib/ical';
+import { rememberUserTz } from '@/lib/assistant/time';
 
 export const runtime = 'nodejs';
 
@@ -24,6 +25,7 @@ export async function POST(request: NextRequest) {
   }
 
   const url = parsed.data.ical_url.replace(/^webcal:/i, 'https:');
+  await rememberUserTz(supabase, user.id, parsed.data.tz);
 
   const { data: subscription, error: subError } = await supabase
     .from('calendar_subscriptions')

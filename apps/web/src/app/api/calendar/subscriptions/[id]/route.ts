@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getServerSupabase } from '@/lib/supabase/server';
+import { rememberUserTz } from '@/lib/assistant/time';
 
 export const runtime = 'nodejs';
 
@@ -42,6 +43,9 @@ export async function PATCH(
   }
   if (Object.keys(parsed.data).length === 0) {
     return NextResponse.json({ error: 'no fields' }, { status: 400 });
+  }
+  if (parsed.data.tz) {
+    await rememberUserTz(supabase, user.id, parsed.data.tz);
   }
 
   const { data, error } = await supabase

@@ -13,11 +13,18 @@ import type { Json } from '@teddy/supabase';
 import { getServerSupabase } from '@/lib/supabase/server';
 import { buildTools } from '@/lib/assistant/tools';
 import { SYSTEM_PROMPT, buildContext } from '@/lib/assistant/context';
-import { resolveUserTz } from '@/lib/assistant/time';
+import {
+  buildClarificationMessage,
+  canonicalClarificationReply,
+  findPendingClarification,
+  parseClarificationAsk,
+  resolveClarificationReply,
+} from '@/lib/assistant/clarify';
+import { rememberUserTz, resolveUserTz } from '@/lib/assistant/time';
 
 export const runtime = 'nodejs';
 
-const MODEL = 'gpt-4o-mini';
+const MODEL = process.env.OPENAI_ASSISTANT_MODEL ?? 'gpt-4o-mini';
 
 const RequestSchema = z.object({
   conversation_id: z.string().uuid().nullable().optional(),
@@ -41,10 +48,16 @@ interface DbMessageRow {
 
 function toOpenAIHistory(rows: DbMessageRow[]): ChatCompletionMessageParam[] {
   const out: ChatCompletionMessageParam[] = [];
+  let pendingAsk = null as ReturnType<typeof parseClarificationAsk>;
   for (const r of rows) {
     if (r.role === 'system') continue; // system is rebuilt each request
     if (r.role === 'user') {
-      out.push({ role: 'user', content: r.content ?? '' });
+      const content =
+        pendingAsk && r.content
+          ? canonicalClarificationReply(r.content, pendingAsk)
+          : (r.content ?? '');
+      out.push({ role: 'user', content });
+      pendingAsk = null;
     } else if (r.role === 'assistant') {
       const tc = Array.isArray(r.tool_calls)
         ? (r.tool_calls as ChatCompletionMessageToolCall[])
@@ -55,6 +68,7 @@ function toOpenAIHistory(rows: DbMessageRow[]): ChatCompletionMessageParam[] {
       };
       if (tc && tc.length > 0) msg.tool_calls = tc;
       out.push(msg);
+      pendingAsk = parseClarificationAsk(r.content);
     } else if (r.role === 'tool') {
       const msg: ChatCompletionToolMessageParam = {
         role: 'tool',
@@ -103,6 +117,14 @@ export async function POST(request: NextRequest) {
   if (priorErr) return new Response(priorErr.message, { status: 500 });
 
   const history = toOpenAIHistory((priorRows ?? []) as DbMessageRow[]);
+  const pendingAsk = findPendingClarification((priorRows ?? []) as DbMessageRow[]);
+  const clarification = pendingAsk
+    ? resolveClarificationReply(parsed.data.message, pendingAsk)
+    : { kind: 'unknown', raw: parsed.data.message as string };
+  const effectiveMessage =
+    clarification.kind === 'unknown'
+      ? parsed.data.message
+      : canonicalClarificationReply(parsed.data.message, pendingAsk);
 
   // Persist the user's new message.
   const { data: userMsg, error: userMsgErr } = await supabase
@@ -117,10 +139,11 @@ export async function POST(request: NextRequest) {
     .single();
   if (userMsgErr) return new Response(userMsgErr.message, { status: 500 });
 
+  await rememberUserTz(supabase, user.id, parsed.data.tz);
   const userTz = await resolveUserTz(supabase, user.id, parsed.data.tz);
   const context = await buildContext(supabase, user.id, userTz);
   const systemPrompt = `${SYSTEM_PROMPT}\n\n${context}`;
-  const tools = buildTools(supabase, user.id, userTz, parsed.data.message);
+  const tools = buildTools(supabase, user.id, userTz, effectiveMessage);
 
   // If the user attached images, wrap the message + images in a multipart
   // user content array (gpt-4o-mini supports vision). Otherwise plain string.
@@ -128,13 +151,13 @@ export async function POST(request: NextRequest) {
   const userContent: ChatCompletionUserMessageParam['content'] =
     imageUrls.length > 0
       ? ([
-          { type: 'text', text: parsed.data.message },
+          { type: 'text', text: effectiveMessage },
           ...imageUrls.map(
             (url) =>
               ({ type: 'image_url', image_url: { url } }) satisfies ChatCompletionContentPart,
           ),
         ] satisfies ChatCompletionContentPart[])
-      : parsed.data.message;
+      : effectiveMessage;
 
   const encoder = new TextEncoder();
   const convId = conversationId;
@@ -209,6 +232,29 @@ export async function POST(request: NextRequest) {
                 tool_call_id: ev.tool_call_id,
                 name: ev.name,
                 content: ev.content,
+              });
+            } else if (ev.type === 'clarification_requested') {
+              const askContent = buildClarificationMessage({
+                question: ev.question,
+                options: ev.options,
+              });
+              const { data: row } = await supabase
+                .from('messages')
+                .insert({
+                  conversation_id: convId,
+                  owner_id: user.id,
+                  role: 'assistant',
+                  content: askContent,
+                  tool_calls: null,
+                })
+                .select('id, created_at')
+                .single();
+              send({
+                type: 'assistant_message',
+                id: row?.id,
+                created_at: row?.created_at,
+                content: askContent,
+                tool_calls: null,
               });
             } else if (ev.type === 'done') {
               send({ type: 'done' });

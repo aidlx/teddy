@@ -11,6 +11,11 @@ import {
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import {
+  parseClarificationAsk,
+  resolveClarificationReply,
+  type ClarificationResolution,
+} from '@/lib/assistant/clarify';
 
 interface ToolCall {
   id: string;
@@ -45,46 +50,29 @@ type Status =
   | { kind: 'calling'; name: string }
   | null;
 
-interface AskPayload {
-  question: string;
-  options: { label: string }[];
-}
-
 interface Turn {
   user: UIMessage;
+  userSelection: Extract<ClarificationResolution, { kind: 'option' | 'none' }> | null;
   intermediate: UIMessage[];
   final: UIMessage | null;
 }
 
-const ASK_FENCE = /```ask\s*\n?([\s\S]+?)\n?```/;
-
-function parseAsk(content: string | null | undefined): AskPayload | null {
-  if (!content) return null;
-  const match = content.match(ASK_FENCE);
-  if (!match || !match[1]) return null;
-  try {
-    const parsed = JSON.parse(match[1].trim()) as {
-      question?: unknown;
-      options?: unknown;
-    };
-    if (typeof parsed.question !== 'string' || !Array.isArray(parsed.options)) return null;
-    const options = parsed.options
-      .map((o) => (o && typeof o === 'object' && 'label' in o && typeof (o as { label: unknown }).label === 'string'
-        ? { label: (o as { label: string }).label }
-        : null))
-      .filter((o): o is { label: string } => o !== null);
-    if (options.length === 0) return null;
-    return { question: parsed.question, options };
-  } catch {
-    return null;
-  }
-}
-
 function buildTurns(messages: UIMessage[]): Turn[] {
   const turns: Turn[] = [];
+  let pendingAsk = null as ReturnType<typeof parseClarificationAsk>;
   for (const m of messages) {
     if (m.role === 'user') {
-      turns.push({ user: m, intermediate: [], final: null });
+      const selection =
+        pendingAsk && m.content
+          ? resolveClarificationReply(m.content, pendingAsk)
+          : ({ kind: 'unknown', raw: m.content ?? '' } as ClarificationResolution);
+      turns.push({
+        user: m,
+        userSelection: selection.kind === 'unknown' ? null : selection,
+        intermediate: [],
+        final: null,
+      });
+      pendingAsk = null;
       continue;
     }
     const last = turns[turns.length - 1];
@@ -93,6 +81,7 @@ function buildTurns(messages: UIMessage[]): Turn[] {
       m.role === 'assistant' && !(m.tool_calls && m.tool_calls.length > 0);
     if (isFinalAssistant) {
       last.final = m;
+      pendingAsk = parseClarificationAsk(m.content);
     } else {
       last.intermediate.push(m);
     }
@@ -708,17 +697,13 @@ function TurnBlock({
   status: Status;
   onOptionPick: (label: string) => void;
 }) {
-  const finalAsk = turn.final ? parseAsk(turn.final.content) : null;
+  const finalAsk = turn.final ? parseClarificationAsk(turn.final.content) : null;
   const finalContent = turn.final?.content;
   const finalPlainContent = finalAsk ? null : finalContent;
 
   return (
     <li className="flex flex-col gap-2">
-      <div className="flex justify-end">
-        <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-amber-400 px-4 py-2 text-sm text-zinc-950 shadow-sm">
-          {turn.user.content}
-        </div>
-      </div>
+      <UserBubble content={turn.user.content} selection={turn.userSelection} />
 
       {turn.intermediate.length > 0 && (
         <ThinkingBlock messages={turn.intermediate} />
@@ -742,6 +727,33 @@ function TurnBlock({
 
       {status && <StatusLine status={status} />}
     </li>
+  );
+}
+
+function UserBubble({
+  content,
+  selection,
+}: {
+  content: string | null;
+  selection: Extract<ClarificationResolution, { kind: 'option' | 'none' }> | null;
+}) {
+  const raw = content ?? '';
+  const resolved = selection?.label ?? raw;
+  const showRaw = selection && raw.trim() && raw.trim() !== resolved.trim();
+
+  return (
+    <div className="flex justify-end">
+      <div className="flex max-w-[80%] flex-col gap-1 rounded-2xl bg-amber-400 px-4 py-2 text-sm text-zinc-950 shadow-sm">
+        <div className="whitespace-pre-wrap">
+          {resolved}
+        </div>
+        {showRaw && (
+          <div className="text-[11px] text-zinc-800/70">
+            typed: {raw}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

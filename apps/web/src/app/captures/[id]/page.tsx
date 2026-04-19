@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getServerSupabase } from '@/lib/supabase/server';
-import { formatRelative } from '@/lib/format';
+import { formatRelative, formatTaskDue, formatTaskDueExact } from '@/lib/format';
+import { resolveUserTz } from '@/lib/assistant/time';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,13 +21,19 @@ export default async function CaptureDetailPage({
   const [{ data: capture }, { data: tasks }, { data: notes }, { data: courses }] =
     await Promise.all([
       supabase.from('captures').select('*').eq('id', id).maybeSingle(),
-      supabase.from('tasks').select('*').eq('capture_id', id),
+      supabase
+        .from('tasks')
+        .select(
+          'id, title, due_at, due_kind, due_tz, anchor_event_id, offset_minutes, course_id',
+        )
+        .eq('capture_id', id),
       supabase.from('notes').select('*').eq('capture_id', id),
       supabase.from('courses').select('id, name, color'),
     ]);
 
   if (!capture) notFound();
 
+  const userTz = await resolveUserTz(supabase, user.id);
   const coursesById = new Map((courses ?? []).map((c) => [c.id, c] as const));
   const parsedPretty = capture.parsed_json
     ? JSON.stringify(capture.parsed_json, null, 2)
@@ -86,8 +93,8 @@ export default async function CaptureDetailPage({
                 )}
                 <span className="truncate text-zinc-900 dark:text-zinc-100">{t.title}</span>
                 {t.due_at && (
-                  <span className="ml-auto flex-none text-xs text-zinc-500">
-                    {formatRelative(t.due_at)}
+                  <span className="ml-auto flex-none text-xs text-zinc-500" title={formatTaskDueExact(t, userTz)}>
+                    {formatTaskDue(t, userTz)}
                   </span>
                 )}
               </li>

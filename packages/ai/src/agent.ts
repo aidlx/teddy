@@ -13,6 +13,13 @@ export interface AgentTool {
   handler: ToolHandler;
 }
 
+interface ClarificationToolResult {
+  __ask_clarification: {
+    question: string;
+    options: { label: string }[];
+  };
+}
+
 export type AgentEvent =
   | { type: 'assistant_delta'; content_delta: string }
   | { type: 'tool_call_start'; tool_call_id: string; name: string }
@@ -21,6 +28,7 @@ export type AgentEvent =
       content: string | null;
       tool_calls: ChatCompletionMessageToolCall[] | null;
     }
+  | { type: 'clarification_requested'; question: string; options: { label: string }[] }
   | { type: 'tool_result'; tool_call_id: string; name: string; content: string }
   | { type: 'done'; content: string }
   | { type: 'error'; message: string };
@@ -34,6 +42,17 @@ export interface RunAgentOptions {
   tools: AgentTool[];
   maxIterations?: number;
   onEvent: (event: AgentEvent) => Promise<void> | void;
+}
+
+function isClarificationToolResult(value: unknown): value is ClarificationToolResult {
+  if (!value || typeof value !== 'object' || !('__ask_clarification' in value)) return false;
+  const ask = (value as ClarificationToolResult).__ask_clarification;
+  return (
+    !!ask &&
+    typeof ask.question === 'string' &&
+    Array.isArray(ask.options) &&
+    ask.options.every((option) => option && typeof option.label === 'string')
+  );
 }
 
 export async function runAgent(opts: RunAgentOptions): Promise<void> {
@@ -54,6 +73,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<void> {
       messages,
       tools: toolDefs,
       tool_choice: 'auto',
+      parallel_tool_calls: false,
       temperature: 0.3,
       stream: true,
     });
@@ -109,26 +129,42 @@ export async function runAgent(opts: RunAgentOptions): Promise<void> {
       return;
     }
 
+    let clarification: ClarificationToolResult['__ask_clarification'] | null = null;
     for (const call of toolCalls) {
       if (!call || call.type !== 'function') continue;
       const name = call.function.name;
       const handler = handlers.get(name);
 
-      let resultText: string;
+      let resultText: string | undefined;
       try {
-        let args: Record<string, unknown> = {};
-        try {
-          const raw = call.function.arguments || '{}';
-          const parsed = JSON.parse(raw);
-          if (parsed && typeof parsed === 'object') args = parsed as Record<string, unknown>;
-        } catch {
-          args = {};
-        }
         if (!handler) {
           resultText = JSON.stringify({ error: `Unknown tool: ${name}` });
         } else {
-          const out = await handler(args);
-          resultText = JSON.stringify(out ?? null);
+          const raw = call.function.arguments || '{}';
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            resultText = JSON.stringify({
+              error: 'invalid_tool_arguments',
+              reason: `Tool "${name}" received invalid JSON arguments.`,
+            });
+            parsed = null;
+          }
+          if (resultText === undefined) {
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              resultText = JSON.stringify({
+                error: 'invalid_tool_arguments',
+                reason: `Tool "${name}" expects a JSON object for arguments.`,
+              });
+            } else {
+              const out = await handler(parsed as Record<string, unknown>);
+              if (isClarificationToolResult(out)) {
+                clarification = out.__ask_clarification;
+              }
+              resultText = JSON.stringify(out ?? null);
+            }
+          }
         }
       } catch (err) {
         resultText = JSON.stringify({ error: (err as Error).message ?? 'Tool error' });
@@ -137,14 +173,24 @@ export async function runAgent(opts: RunAgentOptions): Promise<void> {
       messages.push({
         role: 'tool',
         tool_call_id: call.id,
-        content: resultText,
+        content: resultText ?? JSON.stringify({ error: 'Tool returned no result' }),
       });
       await opts.onEvent({
         type: 'tool_result',
         tool_call_id: call.id,
         name,
-        content: resultText,
+        content: resultText ?? JSON.stringify({ error: 'Tool returned no result' }),
       });
+    }
+
+    if (clarification) {
+      await opts.onEvent({
+        type: 'clarification_requested',
+        question: clarification.question,
+        options: clarification.options,
+      });
+      await opts.onEvent({ type: 'done', content: '' });
+      return;
     }
   }
 

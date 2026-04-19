@@ -65,7 +65,7 @@ function matchKey(icalUid: string | null | undefined, startIso: string): string 
 function rowsEqual(
   existing: Pick<
     EventRow,
-    'title' | 'location' | 'description' | 'end_at' | 'all_day' | 'course_id'
+    'title' | 'location' | 'description' | 'end_at' | 'all_day' | 'course_id' | 'source_tz'
   >,
   incoming: EventInsert,
 ): boolean {
@@ -75,7 +75,8 @@ function rowsEqual(
     (existing.description ?? null) === (incoming.description ?? null) &&
     (existing.end_at ?? null) === (incoming.end_at ?? null) &&
     existing.all_day === (incoming.all_day ?? false) &&
-    (existing.course_id ?? null) === (incoming.course_id ?? null)
+    (existing.course_id ?? null) === (incoming.course_id ?? null) &&
+    existing.source_tz === incoming.source_tz
   );
 }
 
@@ -85,6 +86,13 @@ export async function syncSubscription(
   subscriptionId: string,
   icalUrl: string,
 ): Promise<SyncResult> {
+  const { data: subscription, error: subErr } = await supabase
+    .from('calendar_subscriptions')
+    .select('tz')
+    .eq('id', subscriptionId)
+    .maybeSingle();
+  if (subErr) throw new Error(subErr.message);
+
   const parsed = await ical.async.fromURL(icalUrl);
 
   const now = new Date();
@@ -145,11 +153,13 @@ export async function syncSubscription(
     const course = parseCourseFromTitle(title) ?? fallbackCourseFromTitle(title);
     const courseId = course ? byCode.get(course.code) ?? null : null;
     const startIso = instance.start.toISOString();
+    const sourceTz = instance.start.tz ?? event.start?.tz ?? subscription?.tz ?? 'UTC';
     const row: EventInsert = {
       owner_id: ownerId,
       subscription_id: subscriptionId,
       course_id: courseId,
       source: 'ical',
+      source_tz: sourceTz,
       ical_uid: event.uid,
       title,
       location: textOf(event.location),
@@ -164,7 +174,7 @@ export async function syncSubscription(
 
   const { data: existingEvents, error: existingErr } = await supabase
     .from('events')
-    .select('id, ical_uid, start_at, title, location, description, end_at, all_day, course_id')
+    .select('id, ical_uid, start_at, title, location, description, end_at, all_day, course_id, source_tz')
     .eq('subscription_id', subscriptionId);
   if (existingErr) throw new Error(existingErr.message);
 
@@ -179,6 +189,7 @@ export async function syncSubscription(
       | 'end_at'
       | 'all_day'
       | 'course_id'
+      | 'source_tz'
     >
   >();
   for (const e of existingEvents ?? []) {
@@ -208,6 +219,7 @@ export async function syncSubscription(
         end_at: incoming.end_at ?? null,
         all_day: incoming.all_day ?? false,
         course_id: incoming.course_id ?? null,
+        source_tz: incoming.source_tz ?? 'UTC',
       },
     });
   }
