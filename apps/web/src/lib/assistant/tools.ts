@@ -340,6 +340,25 @@ function buildCourseNotFoundError(ref: string) {
   };
 }
 
+function buildCourseEventMismatchError(
+  event: EventAnchorRow,
+  requestedCourseRef: string | null | undefined,
+) {
+  return {
+    error: 'course_event_mismatch',
+    reason: 'The selected event_id belongs to a different course than the requested course_ref.',
+    event: {
+      id: event.id,
+      title: event.title,
+      start_at: event.start_at,
+      course_id: event.course_id,
+    },
+    requested_course_ref: requestedCourseRef ?? null,
+    instruction:
+      'Do not ask again if the user already chose the course. Call get_events for the chosen course around this event time, then retry the write with the new event_id.',
+  };
+}
+
 function clarificationSchemaJson() {
   return {
     type: 'object',
@@ -811,21 +830,17 @@ export function buildTools(
       handler: async (args) => {
         const title = asString(args.title);
         if (!title) throw new Error('title is required');
-        const course = await resolveCourseWrite(asString(args.course_ref));
+        const requestedCourseRef = asString(args.course_ref);
+        const course = await resolveCourseWrite(requestedCourseRef);
         if ('error' in course) return course.error;
         const due = await resolveDue(args.due);
         let courseId = course.id;
         if (due.anchorEvent?.course_id) {
+          if (courseId && courseId !== due.anchorEvent.course_id) {
+            return buildCourseEventMismatchError(due.anchorEvent, requestedCourseRef);
+          }
           const guard = await guardEventAmbiguity(due.anchorEvent);
           if (!guard.ok) return guard.error;
-          if (courseId && courseId !== due.anchorEvent.course_id) {
-            return {
-              error: 'course_event_mismatch',
-              reason: 'The selected event belongs to a different course than course_ref.',
-              event_course_id: due.anchorEvent.course_id,
-              requested_course_id: courseId,
-            };
-          }
           courseId = due.anchorEvent.course_id;
         }
         const { data, error } = await supabase
@@ -887,6 +902,8 @@ export function buildTools(
         if (!id) throw new Error('id is required');
         const patch: TaskUpdate = {};
         let eventCourseId: string | null | undefined;
+        let eventAnchor: EventAnchorRow | null = null;
+        const requestedCourseRef = asString(args.course_ref);
         if (asBool(args.set_title)) {
           const title = asString(args.title);
           if (!title) throw new Error('title is required when set_title is true');
@@ -905,22 +922,25 @@ export function buildTools(
             anchor_event_id: due.anchor_event_id,
             offset_minutes: due.offset_minutes,
           });
+          eventAnchor = due.anchorEvent;
           eventCourseId = due.anchorEvent?.course_id ?? null;
           if (due.anchorEvent) {
+            if (requestedCourseRef) {
+              const requestedCourse = await resolveCourseWrite(requestedCourseRef);
+              if ('error' in requestedCourse) return requestedCourse.error;
+              if (requestedCourse.id && requestedCourse.id !== due.anchorEvent.course_id) {
+                return buildCourseEventMismatchError(due.anchorEvent, requestedCourseRef);
+              }
+            }
             const guard = await guardEventAmbiguity(due.anchorEvent);
             if (!guard.ok) return guard.error;
           }
         }
         if (asBool(args.set_course)) {
-          const course = await resolveCourseWrite(asString(args.course_ref));
+          const course = await resolveCourseWrite(requestedCourseRef);
           if ('error' in course) return course.error;
-          if (eventCourseId && course.id && course.id !== eventCourseId) {
-            return {
-              error: 'course_event_mismatch',
-              reason: 'The selected event belongs to a different course than course_ref.',
-              event_course_id: eventCourseId,
-              requested_course_id: course.id,
-            };
+          if (eventAnchor && course.id && course.id !== eventCourseId) {
+            return buildCourseEventMismatchError(eventAnchor, requestedCourseRef);
           }
           patch.course_id = course.id;
         } else if (eventCourseId) {

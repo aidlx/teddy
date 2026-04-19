@@ -672,10 +672,12 @@ function TurnList({
     <ul className="flex flex-col gap-4 py-4">
       {turns.map((t, i) => {
         const isLast = i === turns.length - 1;
+        const resolvedSelection = turns[i + 1]?.userSelection ?? null;
         return (
           <TurnBlock
             key={t.user.id}
             turn={t}
+            resolvedSelection={resolvedSelection}
             streamingContent={isLast ? streamingContent : null}
             status={isLast && sending ? status : null}
             onOptionPick={onOptionPick}
@@ -688,11 +690,13 @@ function TurnList({
 
 function TurnBlock({
   turn,
+  resolvedSelection,
   streamingContent,
   status,
   onOptionPick,
 }: {
   turn: Turn;
+  resolvedSelection: Extract<ClarificationResolution, { kind: 'option' | 'none' }> | null;
   streamingContent: string | null;
   status: Status;
   onOptionPick: (label: string) => void;
@@ -717,6 +721,7 @@ function TurnBlock({
         <ClarificationCard
           question={finalAsk.question}
           options={finalAsk.options}
+          resolvedSelection={resolvedSelection}
           onPick={onOptionPick}
         />
       )}
@@ -936,12 +941,15 @@ function ThinkingBlock({ messages }: { messages: UIMessage[] }) {
 function ClarificationCard({
   question,
   options,
+  resolvedSelection,
   onPick,
 }: {
   question: string;
   options: { label: string }[];
+  resolvedSelection: Extract<ClarificationResolution, { kind: 'option' | 'none' }> | null;
   onPick: (label: string) => void;
 }) {
+  const locked = resolvedSelection !== null;
   return (
     <div className="max-w-[85%] rounded-2xl border border-amber-300/60 bg-amber-50/60 px-4 py-3 shadow-sm dark:border-amber-400/20 dark:bg-amber-400/5">
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
@@ -951,12 +959,29 @@ function ClarificationCard({
         Quick question
       </div>
       <p className="mt-1 text-sm text-zinc-900 dark:text-zinc-100">{question}</p>
+      {resolvedSelection && (
+        <div className="mt-2 inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+          {resolvedSelection.kind === 'none'
+            ? 'Chosen: None of these'
+            : `Chosen: ${resolvedSelection.label}`}
+        </div>
+      )}
       <div className="mt-3 flex flex-wrap gap-2">
         {options.map((opt) => (
           <button
             key={opt.label}
+            type="button"
+            disabled={locked}
             onClick={() => onPick(opt.label)}
-            className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm transition hover:border-amber-400/60 hover:bg-amber-50 hover:text-amber-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-amber-400/40 dark:hover:bg-amber-400/10 dark:hover:text-amber-200"
+            className={`rounded-full border px-3 py-1.5 text-xs font-medium shadow-sm transition ${
+              resolvedSelection?.kind === 'option' && resolvedSelection.label === opt.label
+                ? 'border-emerald-400/70 bg-emerald-100 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-400/10 dark:text-emerald-200'
+                : 'border-zinc-200 bg-white text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200'
+            } ${
+              locked
+                ? 'cursor-default opacity-70'
+                : 'hover:border-amber-400/60 hover:bg-amber-50 hover:text-amber-900 dark:hover:border-amber-400/40 dark:hover:bg-amber-400/10 dark:hover:text-amber-200'
+            }`}
           >
             {opt.label}
           </button>

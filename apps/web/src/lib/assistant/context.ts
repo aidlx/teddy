@@ -27,7 +27,7 @@ Write-action protocol — follow in order whenever you want to call create_task,
 Lecture / event times — ALWAYS tool-call, never trust prior turns:
 - When the user references a specific lecture, lab, exam, or scheduled event, call get_events (or what_am_i_in_now) to fetch the authoritative event id and time. Do not rely on memory or prior turns.
 - Search wide first, not narrow. If the reference might match multiple events, query at least today → end of this week, often today → end of next week, without forcing a guessed course filter.
-- Event rows contain both \`start_local\` / \`event_tz\` (the event's own schedule timezone) and \`start_user_local\` (the user's canonical timezone). Use the event id for scheduling. Use the local wall-clock fields only when you need to explain the time in prose.
+- Event rows contain \`start_local\` / \`end_local\` in the user's canonical timezone and \`display_tz\` telling you which timezone those wall-clock values use. \`source_tz\` is only provenance from the source calendar import. Use the event id for scheduling. Use the local wall-clock fields only when you need to explain the time in prose.
 
 Typed time objects:
 - get_events expects \`from\` and \`to\` objects with \`kind\` set to one of:
@@ -54,6 +54,7 @@ Clarifying questions — ask BEFORE any write tool when ambiguous:
   - \`question\`: a short direct question
   - \`options\`: 2-5 explicit option labels
 - The platform will render the options and may canonicalize short user replies like "first", "the KU one", or "none of these" into one of your option labels on the next turn.
+- If the user clarified which course/event to use, discard stale ids from the rejected option. If a tool returns \`course_event_mismatch\`, re-run \`get_events\` for the chosen option and retry with the new \`event_id\`. Do not ask the same clarification twice unless the re-query is itself still ambiguous.
 - Each option label must be self-explanatory. For course ambiguity, include code + name + type: "721.009 Theoretical Computer Science VO", "721.010 Theoretical Computer Science KU". For event ambiguity where the time also differs, add the day and time: "721.009 TCS VO — Mon Apr 20, 16:00", "721.010 TCS KU — Tue Apr 21, 08:00".
 - Keep options to 2–5. If there are more matches, list the top candidates and add an option labeled "None of these".
 - After the user picks (their next message is the label they chose), continue normally — call the right tool with confidence.
@@ -130,12 +131,11 @@ export async function buildContext(
 
   const currentEv = currentRes.data?.[0];
   if (currentEv) {
-    const eventTz = currentEv.source_tz ?? userTz;
     const until = currentEv.end_at
-      ? `${formatInTz(currentEv.end_at, eventTz, { weekday: true })} (${toLocalWallClock(currentEv.end_at, eventTz)})`
+      ? `${formatInTz(currentEv.end_at, userTz, { weekday: true })} (${toLocalWallClock(currentEv.end_at, userTz)})`
       : '?';
     lines.push(
-      `Currently in: "${currentEv.title}"${currentEv.location ? ` at ${currentEv.location}` : ''} (until ${until}). event_tz=${eventTz} course_id=${currentEv.course_id ?? 'null'}`,
+      `Currently in: "${currentEv.title}"${currentEv.location ? ` at ${currentEv.location}` : ''} (until ${until}). display_tz=${userTz} source_tz=${currentEv.source_tz ?? userTz} course_id=${currentEv.course_id ?? 'null'}`,
     );
   } else {
     lines.push('Currently in: nothing scheduled');
@@ -153,9 +153,8 @@ export async function buildContext(
   if (upcomingRes.data && upcomingRes.data.length > 0) {
     lines.push('Next 24h events:');
     for (const e of upcomingRes.data) {
-      const eventTz = e.source_tz ?? userTz;
       lines.push(
-        `  - id=${e.id}  ${formatInTz(e.start_at, eventTz, { weekday: true })} | event_tz=${eventTz} | start_local=${toLocalWallClock(e.start_at, eventTz)} | start_user_local=${toLocalWallClock(e.start_at, userTz)}: ${e.title}${e.location ? ` @ ${e.location}` : ''} course_id=${e.course_id ?? 'null'}`,
+        `  - id=${e.id}  ${formatInTz(e.start_at, userTz, { weekday: true })} | display_tz=${userTz} | source_tz=${e.source_tz ?? userTz} | start_local=${toLocalWallClock(e.start_at, userTz)}: ${e.title}${e.location ? ` @ ${e.location}` : ''} course_id=${e.course_id ?? 'null'}`,
       );
     }
   }

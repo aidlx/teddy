@@ -312,20 +312,15 @@ export function decorateEventTimes<T extends EventTimeRow>(
   row: T,
   viewerTz: string,
 ): T & {
-  event_tz: string;
+  display_tz: string;
   start_local: string;
   end_local: string | null;
-  start_user_local: string;
-  end_user_local: string | null;
 } {
-  const eventTz = row.source_tz || viewerTz;
   return {
     ...row,
-    event_tz: eventTz,
-    start_local: toLocalWallClock(row.start_at, eventTz),
-    end_local: row.end_at ? toLocalWallClock(row.end_at, eventTz) : null,
-    start_user_local: toLocalWallClock(row.start_at, viewerTz),
-    end_user_local: row.end_at ? toLocalWallClock(row.end_at, viewerTz) : null,
+    display_tz: viewerTz,
+    start_local: toLocalWallClock(row.start_at, viewerTz),
+    end_local: row.end_at ? toLocalWallClock(row.end_at, viewerTz) : null,
   };
 }
 
