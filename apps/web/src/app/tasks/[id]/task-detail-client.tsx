@@ -78,11 +78,15 @@ export function TaskDetailClient({
   courses,
   anchorEvent,
   userTz,
+  onSaved,
+  onDeleted,
 }: {
   initialTask: TaskRecord;
   courses: TaskCourse[];
   anchorEvent: TaskAnchorEvent | null;
   userTz: string;
+  onSaved?: (task: TaskRecord) => void;
+  onDeleted?: () => void;
 }) {
   const router = useRouter();
   const [task, setTask] = useState(initialTask);
@@ -232,6 +236,7 @@ export function TaskDetailClient({
     const nextTask = data as TaskRecord;
     syncForm(nextTask);
     setNotice('Saved.');
+    onSaved?.(nextTask);
     router.refresh();
   }
 
@@ -245,6 +250,11 @@ export function TaskDetailClient({
     setDeleting(false);
     if (deleteError) {
       setError(deleteError.message);
+      return;
+    }
+    if (onDeleted) {
+      onDeleted();
+      router.refresh();
       return;
     }
     router.push('/tasks');

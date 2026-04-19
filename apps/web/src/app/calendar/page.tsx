@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { TaskDetailModal } from '@/components/TaskDetailModal';
+import { EventDetailModal } from '@/components/EventDetailModal';
 import {
   currentDateKey,
   formatTaskDue,
@@ -46,9 +48,13 @@ interface TaskRow {
   anchor_event_id: string | null;
   offset_minutes: number | null;
   course_id: string | null;
+  completed_at: string | null;
 }
 
+type ActiveDetail = { kind: 'task' | 'event'; id: string } | null;
+
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAYS_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 function getTimezones(): string[] {
   type IntlWithSupported = { supportedValuesOf?: (key: string) => string[] };
@@ -61,29 +67,26 @@ function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
 
+function addDays(d: Date, days: number): Date {
+  const next = new Date(d);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function startOfWeek(d: Date): Date {
+  const weekday = (d.getDay() + 6) % 7;
+  return addDays(d, -weekday);
+}
+
 function buildMonthGrid(monthStart: Date): Date[] {
-  const first = new Date(monthStart);
-  const weekday = (first.getDay() + 6) % 7;
-  first.setDate(first.getDate() - weekday);
+  const first = startOfWeek(monthStart);
   const days: Date[] = [];
-  for (let i = 0; i < 42; i++) {
-    const d = new Date(first);
-    d.setDate(d.getDate() + i);
-    days.push(d);
-  }
+  for (let i = 0; i < 42; i++) days.push(addDays(first, i));
   return days;
 }
 
 function fmtMonth(d: Date) {
   return d.toLocaleString(undefined, { month: 'long', year: 'numeric' });
-}
-
-function sameDay(a: Date, b: Date) {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
 }
 
 function fmtTime(iso: string, tz?: string) {
@@ -94,9 +97,6 @@ function fmtTime(iso: string, tz?: string) {
   });
 }
 
-// Extract Y/M/D in the given tz so day-grouping matches what the user sees,
-// not what the server's clock thinks. Without this, a 23:00 lecture in Vienna
-// would fall on the wrong day when the browser is in UTC.
 function dayKeyInTz(iso: string, tz?: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     year: 'numeric',
@@ -114,6 +114,28 @@ function gridDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+type CellItem =
+  | {
+      kind: 'event';
+      id: string;
+      title: string;
+      time: string | null;
+      color: string | null;
+      allDay: boolean;
+      sortMs: number;
+    }
+  | {
+      kind: 'task';
+      id: string;
+      title: string;
+      color: string | null;
+      time: string | null;
+      detail: string | null;
+      exact: string | null;
+      completed: boolean;
+      sortMs: number;
+    };
+
 export default function CalendarPage() {
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -122,9 +144,13 @@ export default function CalendarPage() {
   const [userTz, setUserTz] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [cursor, setCursor] = useState(() => {
     const initialTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return startOfMonth(parseDateKey(currentDateKey(initialTz)));
+    return parseDateKey(currentDateKey(initialTz));
   });
-  const [selected, setSelected] = useState<Date | null>(null);
+  const [selected, setSelected] = useState<Date>(() => {
+    const initialTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return parseDateKey(currentDateKey(initialTz));
+  });
+  const [activeDetail, setActiveDetail] = useState<ActiveDetail>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<string | null>(null);
@@ -133,11 +159,7 @@ export default function CalendarPage() {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
 
-  useEffect(() => {
-    void loadAll();
-  }, []);
-
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     const supabase = getBrowserSupabase();
     const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const [s, e, t, c, p] = await Promise.all([
@@ -148,8 +170,9 @@ export default function CalendarPage() {
         .order('start_at'),
       supabase
         .from('tasks')
-        .select('id, title, due_at, due_kind, due_tz, anchor_event_id, offset_minutes, course_id')
-        .is('completed_at', null),
+        .select(
+          'id, title, due_at, due_kind, due_tz, anchor_event_id, offset_minutes, course_id, completed_at',
+        ),
       supabase.from('courses').select('id, name, color'),
       supabase.from('profiles').select('timezone').maybeSingle(),
     ]);
@@ -163,7 +186,11 @@ export default function CalendarPage() {
     setTasks(t.data ?? []);
     setCourses(c.data ?? []);
     setUserTz(p.data?.timezone ?? browserTz);
-  }
+  }, []);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
 
   async function readJson(res: Response): Promise<Record<string, unknown>> {
     const text = await res.text();
@@ -254,20 +281,7 @@ export default function CalendarPage() {
   const displayTz = useMemo(() => {
     return userTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
   }, [userTz]);
-  const days = useMemo(() => buildMonthGrid(cursor), [cursor]);
   const todayKey = useMemo(() => currentDateKey(displayTz), [displayTz]);
-
-  type CellItem =
-    | { kind: 'event'; id: string; title: string; time: string | null; color: string | null; allDay: boolean }
-    | {
-        kind: 'task';
-        id: string;
-        title: string;
-        color: string | null;
-        time: string | null;
-        detail: string | null;
-        exact: string | null;
-      };
 
   const itemsByDay = useMemo(() => {
     const map = new Map<string, CellItem[]>();
@@ -282,6 +296,7 @@ export default function CalendarPage() {
         time: ev.all_day ? null : fmtTime(ev.start_at, displayTz),
         color: course?.color ?? null,
         allDay: ev.all_day,
+        sortMs: ev.all_day ? 0 : new Date(ev.start_at).getTime(),
       });
       map.set(k, arr);
     }
@@ -290,21 +305,44 @@ export default function CalendarPage() {
       if (!k) continue;
       const arr = map.get(k) ?? [];
       const course = t.course_id ? coursesById.get(t.course_id) : null;
+      const isDateOnly = t.due_kind === 'date';
       arr.push({
         kind: 'task',
         id: t.id,
         title: t.title,
         color: course?.color ?? null,
-        time: t.due_at && t.due_kind !== 'date' ? fmtTime(t.due_at, displayTz) : null,
+        time: t.due_at && !isDateOnly ? fmtTime(t.due_at, displayTz) : null,
         detail: formatTaskDue(t, displayTz),
         exact: formatTaskDueExact(t, displayTz),
+        completed: Boolean(t.completed_at),
+        sortMs:
+          t.due_at && !isDateOnly
+            ? new Date(t.due_at).getTime()
+            : 0,
       });
       map.set(k, arr);
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => a.sortMs - b.sortMs);
     }
     return map;
   }, [events, tasks, coursesById, displayTz]);
 
-  const selectedItems = selected ? itemsByDay.get(gridDayKey(selected)) ?? [] : [];
+  function stepCursor(direction: 1 | -1) {
+    setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + direction, 1));
+  }
+
+  function goToToday() {
+    const today = parseDateKey(todayKey);
+    setCursor(today);
+    setSelected(today);
+  }
+
+  const headerLabel = fmtMonth(cursor);
+
+  const openItem = (item: CellItem) => {
+    setActiveDetail({ kind: item.kind, id: item.id });
+  };
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-4 py-6 md:px-6 md:py-10">
@@ -428,154 +466,251 @@ export default function CalendarPage() {
         )}
       </section>
 
-      <section className="flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}
-            className="rounded-md px-2.5 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-200/60 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900/60 dark:hover:text-zinc-100"
-          >
-            ←
-          </button>
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-semibold tracking-tight">{fmtMonth(cursor)}</h2>
-          <button
-            onClick={() => {
-                const today = parseDateKey(todayKey);
-                setCursor(startOfMonth(today));
-                setSelected(today);
-              }}
-              className="text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-800 dark:decoration-zinc-700 dark:hover:text-zinc-200"
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => stepCursor(-1)}
+              className="rounded-md px-2.5 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-200/60 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900/60 dark:hover:text-zinc-100"
+              aria-label="Previous"
+            >
+              ←
+            </button>
+            <h2 className="text-lg font-semibold tracking-tight">{headerLabel}</h2>
+            <button
+              onClick={() => stepCursor(1)}
+              className="rounded-md px-2.5 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-200/60 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900/60 dark:hover:text-zinc-100"
+              aria-label="Next"
+            >
+              →
+            </button>
+            <button
+              onClick={goToToday}
+              className="ml-1 text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-800 dark:decoration-zinc-700 dark:hover:text-zinc-200"
             >
               Today
             </button>
           </div>
-          <button
-            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}
-            className="rounded-md px-2.5 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-200/60 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900/60 dark:hover:text-zinc-100"
-          >
-            →
-          </button>
         </div>
 
-        <div className="grid grid-cols-7 gap-px overflow-hidden rounded-xl border border-zinc-200 bg-zinc-200 dark:border-zinc-800 dark:bg-zinc-800">
-          {WEEKDAYS.map((w) => (
-            <div
-              key={w}
-              className="bg-white px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:bg-zinc-950"
-            >
-              {w}
-            </div>
-          ))}
-          {days.map((d) => {
-            const inMonth = d.getMonth() === cursor.getMonth();
-            const key = gridDayKey(d);
-            const isToday = key === todayKey;
-            const isSelected = selected && sameDay(d, selected);
-            const items = itemsByDay.get(key) ?? [];
-            return (
-              <button
-                key={key}
-                onClick={() => setSelected(d)}
-                className={`flex min-h-[5.5rem] flex-col items-start gap-0.5 bg-white px-1.5 py-1 text-left transition hover:bg-zinc-100 dark:bg-zinc-950 dark:hover:bg-zinc-900/60 ${
-                  inMonth ? '' : 'text-zinc-400 dark:text-zinc-600'
-                } ${isSelected ? 'ring-2 ring-amber-400 ring-inset' : ''}`}
-              >
-                <span
-                  className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
-                    isToday
-                      ? 'bg-amber-400 font-semibold text-zinc-950'
-                      : 'text-zinc-700 dark:text-zinc-300'
-                  } ${inMonth ? '' : 'text-zinc-400 dark:text-zinc-600'}`}
-                >
-                  {d.getDate()}
-                </span>
-                <div className="flex w-full flex-col gap-0.5 overflow-hidden">
-                  {items.slice(0, 3).map((it, i) => (
-                    <div
-                      key={`${it.kind}-${it.id}-${i}`}
-                      className="flex items-center gap-1 truncate rounded px-1 text-[10px] leading-tight"
-                      style={{
-                        backgroundColor: it.color
-                          ? `${it.color}26`
-                          : it.kind === 'task'
-                            ? 'rgba(251,191,36,0.2)'
-                            : 'rgba(99,102,241,0.15)',
-                        color: it.color ?? undefined,
-                      }}
-                    >
-                      {it.kind === 'event' && it.time && (
-                        <span className="flex-none opacity-70">{it.time}</span>
-                      )}
-                      {it.kind === 'task' && (
-                        <span className="flex-none opacity-70">{it.time ?? '✓'}</span>
-                      )}
-                      <span className="truncate text-zinc-800 dark:text-zinc-200">{it.title}</span>
-                    </div>
-                  ))}
-                  {items.length > 3 && (
-                    <div className="text-[10px] text-zinc-500">+{items.length - 3} more</div>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        <MonthView
+          cursor={cursor}
+          todayKey={todayKey}
+          selectedKey={gridDayKey(selected)}
+          itemsByDay={itemsByDay}
+          onSelectDay={(d) => setSelected(d)}
+          onOpen={openItem}
+        />
+        <SelectedDayList day={selected} itemsByDay={itemsByDay} onOpen={openItem} />
       </section>
 
-      {selected && selectedItems.length > 0 && (
-        <section className="flex flex-col gap-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-            {selected.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
-          </h2>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Events and task deadlines for this day.
-          </p>
-          <ul className="flex flex-col gap-1.5">
-            {selectedItems.map((it, i) => (
-              <li
-                key={`${it.kind}-${it.id}-${i}`}
-                className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm dark:border-zinc-900 dark:bg-zinc-950/40"
-              >
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
-                    it.kind === 'task'
-                      ? 'bg-amber-400/20 text-amber-800 dark:bg-amber-400/10 dark:text-amber-300'
-                      : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
-                  }`}
-                >
-                  {it.kind}
-                </span>
-                {it.color && (
-                  <span
-                    className="h-2 w-2 flex-none rounded-full"
-                    style={{ backgroundColor: it.color }}
-                  />
-                )}
-                {it.kind === 'task' ? (
-                  <Link
-                    href={`/tasks/${it.id}`}
-                    className="min-w-0 truncate text-zinc-900 underline decoration-zinc-300 underline-offset-4 transition hover:text-zinc-950 hover:decoration-zinc-500 dark:text-zinc-100 dark:decoration-zinc-700 dark:hover:text-zinc-50"
-                  >
-                    {it.title}
-                  </Link>
-                ) : (
-                  <span className="truncate text-zinc-900 dark:text-zinc-100">{it.title}</span>
-                )}
-                {it.kind === 'event' && it.time && (
-                  <span className="ml-auto flex-none text-xs tabular-nums text-zinc-500">
-                    {it.time}
-                  </span>
-                )}
-                {it.kind === 'task' && it.detail && (
-                  <span className="ml-auto flex-none text-xs text-zinc-500" title={it.exact ?? undefined}>
-                    {it.detail}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
+      {activeDetail?.kind === 'task' && (
+        <TaskDetailModal
+          taskId={activeDetail.id}
+          userTz={displayTz}
+          onClose={() => setActiveDetail(null)}
+          onChanged={() => {
+            void loadAll();
+          }}
+        />
+      )}
+
+      {activeDetail?.kind === 'event' && (
+        <EventDetailModal
+          eventId={activeDetail.id}
+          userTz={displayTz}
+          onClose={() => setActiveDetail(null)}
+          onOpenTask={(taskId) => setActiveDetail({ kind: 'task', id: taskId })}
+        />
       )}
     </main>
   );
 }
+
+function ItemPill({ item, onOpen }: { item: CellItem; onOpen: (it: CellItem) => void }) {
+  const bg = item.color
+    ? `${item.color}26`
+    : item.kind === 'task'
+      ? 'rgba(251,191,36,0.2)'
+      : 'rgba(99,102,241,0.15)';
+  return (
+    <button
+      type="button"
+      onClick={(ev) => {
+        ev.stopPropagation();
+        onOpen(item);
+      }}
+      className="flex w-full items-center gap-1 truncate rounded px-1 text-left text-[10px] leading-tight transition hover:brightness-95 dark:hover:brightness-110"
+      style={{ backgroundColor: bg, color: item.color ?? undefined }}
+    >
+      {item.kind === 'event' && item.time && (
+        <span className="flex-none opacity-70">{item.time}</span>
+      )}
+      {item.kind === 'task' && (
+        <span className="flex-none opacity-70">{item.time ?? '✓'}</span>
+      )}
+      <span
+        className={`truncate text-zinc-800 dark:text-zinc-200 ${
+          item.kind === 'task' && item.completed ? 'line-through opacity-60' : ''
+        }`}
+      >
+        {item.title}
+      </span>
+    </button>
+  );
+}
+
+function ItemRow({ item, onOpen }: { item: CellItem; onOpen: (it: CellItem) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(item)}
+      className="flex w-full items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-left text-sm transition hover:border-zinc-300 dark:border-zinc-900 dark:bg-zinc-950/40 dark:hover:border-zinc-700"
+    >
+      <span
+        className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
+          item.kind === 'task'
+            ? 'bg-amber-400/20 text-amber-800 dark:bg-amber-400/10 dark:text-amber-300'
+            : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+        }`}
+      >
+        {item.kind}
+      </span>
+      {item.color && (
+        <span className="h-2 w-2 flex-none rounded-full" style={{ backgroundColor: item.color }} />
+      )}
+      <span
+        className={`min-w-0 truncate text-zinc-900 dark:text-zinc-100 ${
+          item.kind === 'task' && item.completed ? 'line-through opacity-60' : ''
+        }`}
+      >
+        {item.title}
+      </span>
+      {item.kind === 'event' && item.time && (
+        <span className="ml-auto flex-none text-xs tabular-nums text-zinc-500">{item.time}</span>
+      )}
+      {item.kind === 'task' && (
+        <span
+          className="ml-auto flex-none text-xs text-zinc-500"
+          title={item.exact ?? undefined}
+        >
+          {item.time ?? item.detail}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function MonthView({
+  cursor,
+  todayKey,
+  selectedKey,
+  itemsByDay,
+  onSelectDay,
+  onOpen,
+}: {
+  cursor: Date;
+  todayKey: string;
+  selectedKey: string;
+  itemsByDay: Map<string, CellItem[]>;
+  onSelectDay: (d: Date) => void;
+  onOpen: (it: CellItem) => void;
+}) {
+  const days = useMemo(() => buildMonthGrid(startOfMonth(cursor)), [cursor]);
+  return (
+    <div className="grid grid-cols-7 gap-px overflow-hidden rounded-xl border border-zinc-200 bg-zinc-200 dark:border-zinc-800 dark:bg-zinc-800">
+      {WEEKDAYS.map((w) => (
+        <div
+          key={w}
+          className="bg-white px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:bg-zinc-950"
+        >
+          {w}
+        </div>
+      ))}
+      {days.map((d) => {
+        const inMonth = d.getMonth() === cursor.getMonth();
+        const key = gridDayKey(d);
+        const isToday = key === todayKey;
+        const isSelected = key === selectedKey;
+        const items = itemsByDay.get(key) ?? [];
+        return (
+          <div
+            key={key}
+            onClick={() => onSelectDay(d)}
+            className={`flex min-h-[5.5rem] cursor-pointer flex-col items-start gap-0.5 px-1.5 py-1 text-left transition ${
+              isSelected
+                ? 'bg-amber-50 ring-1 ring-inset ring-amber-300 dark:bg-amber-400/10 dark:ring-amber-400/40'
+                : 'bg-white hover:bg-zinc-100 dark:bg-zinc-950 dark:hover:bg-zinc-900/60'
+            } ${inMonth ? '' : 'text-zinc-400 dark:text-zinc-600'}`}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(ev) => {
+              if (ev.key === 'Enter' || ev.key === ' ') onSelectDay(d);
+            }}
+          >
+            <span
+              className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
+                isToday
+                  ? 'bg-amber-400 font-semibold text-zinc-950'
+                  : 'text-zinc-700 dark:text-zinc-300'
+              } ${inMonth ? '' : 'text-zinc-400 dark:text-zinc-600'}`}
+            >
+              {d.getDate()}
+            </span>
+            <div className="flex w-full flex-col gap-0.5 overflow-hidden">
+              {items.slice(0, 3).map((it, i) => (
+                <ItemPill key={`${it.kind}-${it.id}-${i}`} item={it} onOpen={onOpen} />
+              ))}
+              {items.length > 3 && (
+                <div className="text-[10px] text-zinc-500">+{items.length - 3} more</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SelectedDayList({
+  day,
+  itemsByDay,
+  onOpen,
+}: {
+  day: Date;
+  itemsByDay: Map<string, CellItem[]>;
+  onOpen: (it: CellItem) => void;
+}) {
+  const key = gridDayKey(day);
+  const items = itemsByDay.get(key) ?? [];
+  const weekdayIndex = (day.getDay() + 6) % 7;
+  const weekdayLabel = WEEKDAYS_LONG[weekdayIndex];
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950/60">
+      <div className="flex items-baseline gap-3">
+        <h3 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+          {weekdayLabel}
+        </h3>
+        <span className="text-sm text-zinc-500 dark:text-zinc-400">
+          {day.toLocaleDateString(undefined, {
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+          })}
+        </span>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">Nothing scheduled.</p>
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {items.map((it, i) => (
+            <li key={`${it.kind}-${it.id}-${i}`}>
+              <ItemRow item={it} onOpen={onOpen} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
